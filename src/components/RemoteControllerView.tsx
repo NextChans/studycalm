@@ -21,13 +21,14 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
   const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
   const [customText, setCustomText] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
 
   const clientRef = useRef<RemoteClient | null>(null);
 
   // 토스트 알림 헬퍼
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 2500);
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
   useEffect(() => {
@@ -43,6 +44,14 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
     const unsubscribe = client.onMessage((msg) => {
       if (msg.type === 'TELEMETRY') {
         setTelemetry(msg.data);
+      } else if (msg.type === 'BROADCAST_STATUS') {
+        if (msg.status === 'PLAYING') {
+          setIsBroadcasting(true);
+          showToast(`📢 매장에서 방송 중: "${msg.text}"`);
+        } else if (msg.status === 'DONE') {
+          setIsBroadcasting(false);
+          showToast(`✅ 매장 방송 완료: "${msg.text}"`);
+        }
       }
     });
 
@@ -211,8 +220,8 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
               <button
                 key={phrase}
                 onClick={() => handleSendTts(phrase)}
-                disabled={!isConnected}
-                className="py-2.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700 active:bg-slate-600 border border-slate-700/60 text-xs font-medium text-left text-slate-200 transition truncate"
+                disabled={!isConnected || isBroadcasting}
+                className="py-2.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700 active:bg-slate-600 disabled:opacity-50 border border-slate-700/60 text-xs font-medium text-left text-slate-200 transition truncate"
               >
                 "{phrase}"
               </button>
@@ -229,14 +238,22 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleSendTts(customText);
               }}
-              className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              disabled={isBroadcasting}
+              className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
             />
             <button
               onClick={() => handleSendTts(customText)}
-              disabled={!isConnected || !customText.trim()}
-              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-bold text-white transition shrink-0"
+              disabled={!isConnected || !customText.trim() || isBroadcasting}
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-bold text-white transition shrink-0 flex items-center gap-1.5"
             >
-              전송
+              {isBroadcasting ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                  <span>방송 중</span>
+                </>
+              ) : (
+                '전송'
+              )}
             </button>
           </div>
         </div>

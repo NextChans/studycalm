@@ -1,4 +1,11 @@
-export type RemoteActionType = 'ALERT' | 'TTS' | 'RECALIBRATE' | 'TELEMETRY' | 'PING' | 'PONG';
+export type RemoteActionType =
+  | 'ALERT'
+  | 'TTS'
+  | 'RECALIBRATE'
+  | 'TELEMETRY'
+  | 'PING'
+  | 'PONG'
+  | 'BROADCAST_STATUS';
 
 export interface BaseRemoteMessage {
   type: RemoteActionType;
@@ -38,11 +45,24 @@ export interface PingMessage extends BaseRemoteMessage {
   type: 'PING' | 'PONG';
 }
 
-export type RemoteMessage = AlertMessage | TtsMessage | RecalibrateMessage | TelemetryMessage | PingMessage;
+export interface BroadcastStatusMessage extends BaseRemoteMessage {
+  type: 'BROADCAST_STATUS';
+  status: 'PLAYING' | 'DONE';
+  text: string;
+}
+
+export type RemoteMessage =
+  | AlertMessage
+  | TtsMessage
+  | RecalibrateMessage
+  | TelemetryMessage
+  | PingMessage
+  | BroadcastStatusMessage;
 
 export type OutgoingRemoteMessage =
   | { type: 'ALERT' }
   | { type: 'TTS'; text: string }
   | { type: 'RECALIBRATE' }
   | { type: 'TELEMETRY'; data: TelemetryData }
-  | { type: 'PING' | 'PONG' };
+  | { type: 'PING' | 'PONG' }
+  | { type: 'BROADCAST_STATUS'; status: 'PLAYING' | 'DONE'; text: string };

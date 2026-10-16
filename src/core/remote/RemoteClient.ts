@@ -33,7 +33,8 @@ export class RemoteClient {
       clientId: `studycalm_${this.role}_${Math.random().toString(16).slice(2, 8)}`,
       clean: true,
       connectTimeout: 5000,
-      reconnectPeriod: 3000,
+      reconnectPeriod: 2000,
+      keepalive: 30, // 모바일 환경 웹소켓 절전/차단 방지 핑퐁 주기
     });
 
     this.client = client;

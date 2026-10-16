@@ -58,7 +58,14 @@ export const App: React.FC = () => {
   // 원격 통신 (태블릿 호스트)
   const [roomId, setRoomId] = useState<string>(() => RoomRepo.getOrCreateRoomId());
   const [isRemoteConnected, setIsRemoteConnected] = useState<boolean>(false);
+  const [remoteBroadcastText, setRemoteBroadcastText] = useState<string | null>(null);
   const remoteClientRef = useRef<RemoteClient | null>(null);
+
+  // 최신 텔레메트리 데이터 ref (리렌더링 시 interval 취소 방지)
+  const latestTelemetryRef = useRef({ snapshot, dailyAlertCount });
+  useEffect(() => {
+    latestTelemetryRef.current = { snapshot, dailyAlertCount };
+  }, [snapshot, dailyAlertCount]);
 
   // PWA 서비스워커 등록
   useEffect(() => {
@@ -80,11 +87,29 @@ export const App: React.FC = () => {
     client.connect();
     remoteClientRef.current = client;
 
-    const unsubscribe = client.onMessage((msg) => {
+    const unsubscribe = client.onMessage(async (msg) => {
       if (msg.type === 'ALERT') {
         triggerManualAlert();
       } else if (msg.type === 'TTS') {
-        speakTts(msg.text);
+        setRemoteBroadcastText(msg.text);
+        // 원격 리모컨으로 방송 시작 상태 ACK 전송
+        remoteClientRef.current?.sendMessage({
+          type: 'BROADCAST_STATUS',
+          status: 'PLAYING',
+          text: msg.text,
+        });
+
+        try {
+          await speakTts(msg.text);
+        } finally {
+          // 원격 리모컨으로 방송 완료 상태 ACK 전송
+          remoteClientRef.current?.sendMessage({
+            type: 'BROADCAST_STATUS',
+            status: 'DONE',
+            text: msg.text,
+          });
+          setTimeout(() => setRemoteBroadcastText(null), 3000);
+        }
       } else if (msg.type === 'RECALIBRATE') {
         recalibrate();
       }
@@ -100,22 +125,27 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (isRemoteRoute || !remoteClientRef.current || !isRemoteConnected) return;
 
-    const timer = setInterval(() => {
+    const sendTelemetry = () => {
+      const { snapshot: snap, dailyAlertCount: count } = latestTelemetryRef.current;
       remoteClientRef.current?.sendMessage({
         type: 'TELEMETRY',
         data: {
-          currentDb: snapshot.currentDb,
-          smoothedDb: snapshot.smoothedDb,
-          baselineDb: snapshot.baselineDb,
-          thresholdDb: snapshot.thresholdDb,
-          state: snapshot.state,
-          dailyAlertCount,
+          currentDb: snap.currentDb,
+          smoothedDb: snap.smoothedDb,
+          baselineDb: snap.baselineDb,
+          thresholdDb: snap.thresholdDb,
+          state: snap.state,
+          dailyAlertCount: count,
         },
       });
-    }, 1500);
+    };
+
+    // 연결 즉시 1회 전송 후 1초 주기로 전송
+    sendTelemetry();
+    const timer = setInterval(sendTelemetry, 1000);
 
     return () => clearInterval(timer);
-  }, [snapshot, dailyAlertCount, isRemoteConnected, isRemoteRoute]);
+  }, [isRemoteConnected, isRemoteRoute]);
 
   const handleApplyUpdate = useCallback(() => {
     if (swRegistration) {
@@ -164,6 +194,16 @@ export const App: React.FC = () => {
           onDismiss={dismissError}
           onRetry={handleToggleStart}
         />
+        {/* 원격 맞춤 멘트 방송 시 태블릿 화면 팝업 배너 */}
+        {remoteBroadcastText && (
+          <div className="p-4 rounded-2xl bg-indigo-950/95 border-2 border-indigo-500 shadow-2xl shadow-indigo-900/50 flex items-center gap-4 animate-bounce">
+            <span className="text-3xl">📢</span>
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-indigo-300">매장 관리자 원격 안내 방송</span>
+              <span className="text-xl font-black text-white">{remoteBroadcastText}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 헤더 바 */}

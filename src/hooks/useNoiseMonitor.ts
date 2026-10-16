@@ -4,6 +4,7 @@ import { NoiseStateMachine } from '../core/machine/NoiseStateMachine';
 import { StateMachineSnapshot } from '../core/machine/types';
 import { SoundPlayer } from '../core/alert/SoundPlayer';
 import { VoiceFallback } from '../core/alert/VoiceFallback';
+import { ChimeSynthesizer } from '../core/alert/ChimeSynthesizer';
 import { CounterRepo } from '../core/storage/counterRepo';
 import { SettingsRepo } from '../core/storage/settingsRepo';
 import { CustomAudioRepo, CustomAudioItem } from '../core/storage/customAudioRepo';
@@ -190,9 +191,22 @@ export function useNoiseMonitor() {
     playerRef.current?.playNextAlert();
   }, []);
 
-  const speakTts = useCallback((text: string) => {
-    VoiceFallback.speak(text, config.volume);
-  }, [config.volume]);
+  const speakTts = useCallback(
+    async (text: string) => {
+      try {
+        machineRef.current?.notifyPlaybackStarted();
+        // 1. 매장 안내 2음 차임벨 (딩동~) 재생으로 손님 주의 환기 및 Web Audio 출력 활성화
+        await ChimeSynthesizer.playChime(config.volume);
+        // 2. 관리자 맞춤 TTS 멘트 음성 송출
+        await VoiceFallback.speak(text, config.volume);
+      } catch (err) {
+        console.warn('[useNoiseMonitor] Error during speakTts:', err);
+      } finally {
+        machineRef.current?.notifyPlaybackEnded();
+      }
+    },
+    [config.volume]
+  );
 
   const dismissError = useCallback(() => {
     setAudioError(null);
