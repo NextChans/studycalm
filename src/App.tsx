@@ -41,10 +41,24 @@ export const App: React.FC = () => {
     triggerManualAlert,
     speakTts,
     dismissError,
+    unlockAudio,
   } = useNoiseMonitor();
 
   const { isLocked, requestLock, releaseLock } = useWakeLock();
   const { isBackground } = useVisibility();
+
+  // 첫 화면 터치 시 모바일 브라우저 오디오 오토플레이 언락
+  useEffect(() => {
+    const handleFirstTouch = () => {
+      unlockAudio();
+    };
+    window.addEventListener('click', handleFirstTouch, { once: true });
+    window.addEventListener('touchstart', handleFirstTouch, { once: true });
+    return () => {
+      window.removeEventListener('click', handleFirstTouch);
+      window.removeEventListener('touchstart', handleFirstTouch);
+    };
+  }, [unlockAudio]);
 
   // PWA 업데이트 감지 상태
   const [swRegistration, setSwRegistration] = useState<ServiceWorkerRegistration | null>(null);
@@ -62,10 +76,10 @@ export const App: React.FC = () => {
   const remoteClientRef = useRef<RemoteClient | null>(null);
 
   // 최신 텔레메트리 데이터 ref (리렌더링 시 interval 취소 방지)
-  const latestTelemetryRef = useRef({ snapshot, dailyAlertCount });
+  const latestTelemetryRef = useRef({ snapshot, dailyAlertCount, isAudioRunning });
   useEffect(() => {
-    latestTelemetryRef.current = { snapshot, dailyAlertCount };
-  }, [snapshot, dailyAlertCount]);
+    latestTelemetryRef.current = { snapshot, dailyAlertCount, isAudioRunning };
+  }, [snapshot, dailyAlertCount, isAudioRunning]);
 
   // PWA 서비스워커 등록
   useEffect(() => {
@@ -89,7 +103,25 @@ export const App: React.FC = () => {
 
     const unsubscribe = client.onMessage(async (msg) => {
       if (msg.type === 'ALERT') {
-        triggerManualAlert();
+        setRemoteBroadcastText('🚨 원격 긴급 경고 방송 송출!');
+        // 원격 리모컨으로 방송 시작 상태 ACK 전송
+        remoteClientRef.current?.sendMessage({
+          type: 'BROADCAST_STATUS',
+          status: 'PLAYING',
+          text: '긴급 경고 방송',
+        });
+
+        try {
+          await triggerManualAlert();
+        } finally {
+          // 원격 리모컨으로 방송 완료 상태 ACK 전송
+          remoteClientRef.current?.sendMessage({
+            type: 'BROADCAST_STATUS',
+            status: 'DONE',
+            text: '긴급 경고 방송',
+          });
+          setTimeout(() => setRemoteBroadcastText(null), 3000);
+        }
       } else if (msg.type === 'TTS') {
         setRemoteBroadcastText(msg.text);
         // 원격 리모컨으로 방송 시작 상태 ACK 전송
@@ -126,7 +158,7 @@ export const App: React.FC = () => {
     if (isRemoteRoute || !remoteClientRef.current || !isRemoteConnected) return;
 
     const sendTelemetry = () => {
-      const { snapshot: snap, dailyAlertCount: count } = latestTelemetryRef.current;
+      const { snapshot: snap, dailyAlertCount: count, isAudioRunning: running } = latestTelemetryRef.current;
       remoteClientRef.current?.sendMessage({
         type: 'TELEMETRY',
         data: {
@@ -136,6 +168,7 @@ export const App: React.FC = () => {
           thresholdDb: snap.thresholdDb,
           state: snap.state,
           dailyAlertCount: count,
+          isAudioRunning: running,
         },
       });
     };
@@ -294,31 +327,43 @@ export const App: React.FC = () => {
         />
 
         {/* 하단 제어 컨트롤 버튼 */}
-        <div className="flex flex-wrap items-center justify-center gap-4 w-full">
-          {/* 메인 시작 / 정지 버튼 (터치 권한 획득 유도) */}
-          <button
-            onClick={handleToggleStart}
-            className={`flex items-center justify-center gap-2 px-8 py-4 rounded-2xl font-black text-base tracking-wide shadow-xl transition-all transform active:scale-95 ${
-              isAudioRunning
-                ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/40 ring-4 ring-indigo-500/20'
-            }`}
-          >
-            <span className="text-xl">{isAudioRunning ? '⏹' : '▶'}</span>
-            <span>{isAudioRunning ? '측정 정지' : '소음 모니터링 시작'}</span>
-          </button>
-
-          {/* 배경소음 재보정 버튼 */}
-          {isAudioRunning && (
-            <button
-              onClick={recalibrate}
-              disabled={snapshot.state === 'CALIBRATING'}
-              className="flex items-center gap-2 px-5 py-4 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 disabled:opacity-50 text-slate-200 font-bold text-sm border border-slate-700 shadow-lg transition"
-            >
-              <span>🔄</span>
-              <span>배경소음 재보정</span>
-            </button>
+        <div className="flex flex-col items-center justify-center gap-3 w-full">
+          {!isAudioRunning && (
+            <div className="w-full max-w-lg p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs text-center font-medium flex items-center justify-center gap-2">
+              <span>💡</span>
+              <span>
+                화면을 터치하여 <strong>[소음 모니터링 시작]</strong>을 눌러주세요.<br />
+                (브라우저 보안 정책상 화면 터치 후 마이크 측정 및 원격 음성 방송이 활성화됩니다.)
+              </span>
+            </div>
           )}
+
+          <div className="flex flex-wrap items-center justify-center gap-4 w-full">
+            {/* 메인 시작 / 정지 버튼 (터치 권한 획득 유도) */}
+            <button
+              onClick={handleToggleStart}
+              className={`flex items-center justify-center gap-2 px-8 py-4 rounded-2xl font-black text-base tracking-wide shadow-xl transition-all transform active:scale-95 ${
+                isAudioRunning
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
+                  : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/40 ring-4 ring-indigo-500/20'
+              }`}
+            >
+              <span className="text-xl">{isAudioRunning ? '⏹' : '▶'}</span>
+              <span>{isAudioRunning ? '측정 정지' : '소음 모니터링 시작'}</span>
+            </button>
+
+            {/* 배경소음 재보정 버튼 */}
+            {isAudioRunning && (
+              <button
+                onClick={recalibrate}
+                disabled={snapshot.state === 'CALIBRATING'}
+                className="flex items-center gap-2 px-5 py-4 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 disabled:opacity-50 text-slate-200 font-bold text-sm border border-slate-700 shadow-lg transition"
+              >
+                <span>🔄</span>
+                <span>배경소음 재보정</span>
+              </button>
+            )}
+          </div>
         </div>
       </main>
 

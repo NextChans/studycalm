@@ -169,13 +169,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           });
         });
       } else {
-        // 기본 음원: Web Audio API 기반 순수 신디사이저 차임벨(딩동) + TTS 음성
-        await ChimeSynthesizer.playChime(formData.volume);
-        await VoiceFallback.speak('조용히 해주세요.', formData.volume);
+        // 기본 음원: 설정된 기본 오디오 파일(/sounds/alert-1.wav) 재생
+        const soundUrl = formData.soundFiles?.[0] || '/sounds/alert-1.wav';
+        const audio = new Audio(soundUrl);
+        previewAudioRef.current = audio;
+        audio.volume = formData.volume;
+        audio.setAttribute('playsinline', '');
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => resolve(), 8000);
+            audio.onended = () => {
+              clearTimeout(timeout);
+              resolve();
+            };
+            audio.onerror = (e) => {
+              clearTimeout(timeout);
+              reject(e);
+            };
+            audio.play().catch((err) => {
+              clearTimeout(timeout);
+              reject(err);
+            });
+          });
+        } catch (audioErr) {
+          console.warn('[SettingsModal] Audio file failed, falling back to synthesizer & TTS:', audioErr);
+          await ChimeSynthesizer.playChime(formData.volume);
+          await VoiceFallback.speak('조용히 해주세요.', formData.volume);
+        }
       }
     } catch (err) {
-      console.warn('[SettingsModal] Preview error, falling back to chime synthesizer:', err);
-      await ChimeSynthesizer.playChime(formData.volume);
+      console.warn('[SettingsModal] Preview error:', err);
     } finally {
       setIsPlayingPreview(false);
       previewAudioRef.current = null;

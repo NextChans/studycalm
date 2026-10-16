@@ -15,6 +15,7 @@ export class VoiceFallback {
   public static unlock(): void {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     try {
+      window.speechSynthesis.cancel();
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
       }
@@ -34,12 +35,59 @@ export class VoiceFallback {
   }
 
   public static async speak(phrase: string = this.defaultPhrase, volume: number = 0.8): Promise<void> {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    if (typeof window === 'undefined') return;
+
+    // 1. 고품질 한국어 오디오 스트림 시도 (네트워크 환경에서 즉각적이고 선명한 음성 보장)
+    try {
+      const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=ko&client=tw-ob&q=${encodeURIComponent(phrase)}`;
+      const audio = new Audio(ttsUrl);
+      audio.volume = Math.max(0, Math.min(1, volume));
+      audio.setAttribute('playsinline', '');
+
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve();
+        }, Math.max(4000, phrase.length * 350));
+
+        const cleanup = () => {
+          clearTimeout(timer);
+          audio.removeEventListener('ended', handleEnded);
+          audio.removeEventListener('error', handleError);
+        };
+
+        const handleEnded = () => {
+          cleanup();
+          resolve();
+        };
+
+        const handleError = (e: Event) => {
+          cleanup();
+          reject(e);
+        };
+
+        audio.addEventListener('ended', handleEnded);
+        audio.addEventListener('error', handleError);
+
+        const p = audio.play();
+        if (p !== undefined) {
+          p.catch((err) => {
+            cleanup();
+            reject(err);
+          });
+        }
+      });
+      return;
+    } catch {
+      // 온라인 스트림 불가 시 브라우저 내장 Web Speech API로 폴백
+    }
+
+    if (!('speechSynthesis' in window)) {
       console.warn('[VoiceFallback] speechSynthesis is not supported in this environment.');
       return;
     }
 
-    // 1. 이전 발화가 진행 중인 경우에만 cancel 후 짧은 텀(60ms) 대기 (WebKit cancel 비동기 유실 방지)
+    // 2. 브라우저 내장 speechSynthesis 폴백
     if (window.speechSynthesis.speaking) {
       window.speechSynthesis.cancel();
       await new Promise<void>((r) => setTimeout(r, 60));

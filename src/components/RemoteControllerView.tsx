@@ -140,7 +140,15 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
           <span className="text-2xl">📱</span>
           <div>
             <h1 className="text-base font-extrabold tracking-tight">StudyCalm 원격 리모컨</h1>
-            <span className="text-[11px] font-mono text-slate-400">룸: {roomId}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-mono text-slate-400">룸: {roomId}</span>
+              <button
+                onClick={() => setRoomId('')}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-medium transition"
+              >
+                룸 변경
+              </button>
+            </div>
           </div>
         </div>
 
@@ -159,13 +167,30 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
 
       {/* 메인 컨트롤러 영역 */}
       <main className="flex-1 flex flex-col gap-4 py-4 overflow-y-auto">
+        {/* 태블릿 대기 상태 경고 배너 */}
+        {telemetry && telemetry.isAudioRunning === false && (
+          <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-semibold flex items-center gap-2.5">
+            <span className="text-xl">⚠️</span>
+            <div className="flex flex-col gap-0.5">
+              <span>매장 태블릿이 현재 대기(정지) 상태입니다.</span>
+              <span className="text-[11px] text-amber-300/80 font-normal">
+                태블릿 화면에서 [소음 모니터링 시작]을 눌러주셔야 브라우저 오디오 권한이 허용되어 방송 소리가 정상 출력됩니다.
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* 1. 실시간 매장 소음 현황 모니터링 카드 */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col gap-3">
           <div className="flex justify-between items-center text-xs">
             <span className="font-semibold text-slate-400">매장 실시간 소음</span>
             {telemetry && (
-              <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold text-[10px]">
-                {telemetry.state}
+              <span className={`px-2 py-0.5 rounded font-semibold text-[10px] ${
+                telemetry.isAudioRunning === false
+                  ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                  : 'bg-slate-800 text-slate-300'
+              }`}>
+                {telemetry.isAudioRunning === false ? '대기 중 (정지)' : telemetry.state}
               </span>
             )}
           </div>
@@ -173,7 +198,7 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
           <div className="flex items-baseline justify-between">
             <div className="flex items-baseline gap-1.5">
               <span className="text-4xl font-mono font-extrabold text-white">
-                {telemetry ? telemetry.smoothedDb.toFixed(1) : '-'}
+                {telemetry && telemetry.isAudioRunning !== false ? telemetry.smoothedDb.toFixed(1) : '-'}
               </span>
               <span className="text-sm font-bold text-slate-400">dBFS</span>
             </div>

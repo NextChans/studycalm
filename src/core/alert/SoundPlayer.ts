@@ -16,7 +16,6 @@ export class SoundPlayer {
   private currentIndex: number = 0;
   private isPlaying: boolean = false;
   private currentAudio: HTMLAudioElement | null = null;
-  private currentBufferSource: AudioBufferSourceNode | null = null;
   private onPlaybackStart?: () => void;
   private onPlaybackEnd?: () => void;
 
@@ -51,7 +50,7 @@ export class SoundPlayer {
   }
 
   /**
-   * 사용자 터치 시 호출하여 iOS Safari 오디오 서브시스템을 잠금 해제(Prime)
+   * 사용자 터치 시 호출하여 iOS Safari & Android Chrome 오디오 서브시스템을 잠금 해제(Prime)
    */
   public unlock(): void {
     try {
@@ -60,6 +59,23 @@ export class SoundPlayer {
       if (ctx.state === 'suspended') {
         ctx.resume().catch(() => {});
       }
+      // 1. 인라인 Base64 무음 WAV로 즉시 브라우저 오디오 채널 언락 (네트워크 지연 0ms)
+      const silentDummy = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+      silentDummy.setAttribute('playsinline', '');
+      silentDummy.volume = 0;
+      const p = silentDummy.play();
+      if (p !== undefined) {
+        p.then(() => {
+          silentDummy.pause();
+        }).catch(() => {});
+      }
+
+      // 2. 기본 경고음 파일들 백그라운드 프리로드
+      this.soundFiles.forEach((file) => {
+        const audio = new Audio();
+        audio.preload = 'auto';
+        audio.src = file;
+      });
     } catch {
       // ignore
     }
@@ -103,94 +119,30 @@ export class SoundPlayer {
     } finally {
       this.isPlaying = false;
       this.currentAudio = null;
-      this.currentBufferSource = null;
       if (this.onPlaybackEnd) {
         this.onPlaybackEnd();
       }
     }
   }
 
-  private async playAudioFile(url: string): Promise<void> {
-    // 1. 공유 AudioContext를 통한 Web Audio 버퍼 재생 우선 시도
-    // (iOS 사파리에서 HTML5 Audio 태그가 마이크 레코딩 세션을 가로채거나 중단시키는 현상 방지)
-    try {
-      const ctx = ChimeSynthesizer.getContext();
-      if (ctx && ctx.state !== 'closed') {
-        if (ctx.state === 'suspended') {
-          await ctx.resume();
-        }
-        await this.playViaWebAudio(ctx, url);
-        return;
-      }
-    } catch (webAudioErr) {
-      console.warn('[SoundPlayer] Web Audio playback failed, falling back to HTMLAudioElement:', webAudioErr);
-    }
-
-    // 2. HTMLAudioElement 폴백 재생
-    await this.playViaHtmlAudio(url);
+  private playAudioFile(url: string): Promise<void> {
+    return this.playViaHtmlAudio(url);
   }
 
-  private playViaWebAudio(ctx: AudioContext, url: string): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      fetch(url)
-        .then((res) => {
-          if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-          return res.arrayBuffer();
-        })
-        .then((buf) => {
-          return new Promise<AudioBuffer>((resBuf, rejBuf) => {
-            ctx.decodeAudioData(buf, resBuf, rejBuf);
-          });
-        })
-        .then((audioBuffer) => {
-          const source = ctx.createBufferSource();
-          this.currentBufferSource = source;
-          source.buffer = audioBuffer;
 
-          const gainNode = ctx.createGain();
-          gainNode.gain.setValueAtTime(this.volume, ctx.currentTime);
-
-          source.connect(gainNode);
-          gainNode.connect(ctx.destination);
-
-          let isSettled = false;
-          const safetyTimer = setTimeout(() => {
-            if (!isSettled) {
-              isSettled = true;
-              try {
-                source.stop();
-              } catch {}
-              this.currentBufferSource = null;
-              resolve();
-            }
-          }, (audioBuffer.duration + 0.5) * 1000);
-
-          source.onended = () => {
-            if (!isSettled) {
-              isSettled = true;
-              clearTimeout(safetyTimer);
-              this.currentBufferSource = null;
-              resolve();
-            }
-          };
-
-          source.start();
-        })
-        .catch(reject);
-    });
-  }
 
   private playViaHtmlAudio(url: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio(url);
       this.currentAudio = audio;
       audio.volume = this.volume;
+      audio.setAttribute('playsinline', '');
 
-      // iOS WebKit에서 이벤트 미발생으로 인한 영구 블로킹 방지 안전 타이머 (최대 7초)
+      // iOS WebKit & Android Chrome에서 이벤트 미발생으로 인한 영구 블로킹 방지 안전 타이머 (최대 5초)
       const safetyTimer = setTimeout(() => {
         cleanup();
-        reject(new Error('Audio playback timed out.'));
-      }, 7000);
+        resolve();
+      }, 5000);
 
       const cleanup = () => {
         clearTimeout(safetyTimer);
@@ -211,22 +163,17 @@ export class SoundPlayer {
       audio.addEventListener('ended', handleEnded);
       audio.addEventListener('error', handleError);
 
-      audio.play().catch((playErr) => {
-        cleanup();
-        reject(playErr);
-      });
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((playErr) => {
+          cleanup();
+          reject(playErr);
+        });
+      }
     });
   }
 
   public stop(): void {
-    if (this.currentBufferSource) {
-      try {
-        this.currentBufferSource.stop();
-      } catch {
-        // ignore
-      }
-      this.currentBufferSource = null;
-    }
     if (this.currentAudio) {
       this.currentAudio.pause();
       this.currentAudio.currentTime = 0;

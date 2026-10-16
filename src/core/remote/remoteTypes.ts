@@ -34,6 +34,7 @@ export interface TelemetryData {
   thresholdDb: number | null;
   state: string;
   dailyAlertCount: number;
+  isAudioRunning?: boolean;
 }
 
 export interface TelemetryMessage extends BaseRemoteMessage {

@@ -185,10 +185,10 @@ export function useNoiseMonitor() {
     machineRef.current?.recalibrate();
   }, []);
 
-  const triggerManualAlert = useCallback(() => {
+  const triggerManualAlert = useCallback(async () => {
     const nextCount = CounterRepo.increment();
     setDailyAlertCount(nextCount);
-    playerRef.current?.playNextAlert();
+    await playerRef.current?.playNextAlert();
   }, []);
 
   const speakTts = useCallback(
@@ -212,6 +212,10 @@ export function useNoiseMonitor() {
     setAudioError(null);
   }, []);
 
+  const unlockAudio = useCallback(() => {
+    playerRef.current?.unlock();
+  }, []);
+
   return {
     config,
     updateConfig,
@@ -229,5 +233,6 @@ export function useNoiseMonitor() {
     triggerManualAlert,
     speakTts,
     dismissError,
+    unlockAudio,
   };
 }

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'studycalm-v1';
+const CACHE_NAME = 'studycalm-v2';
 
 const PRECACHE_ASSETS = [
   '/',
