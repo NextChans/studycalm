@@ -1,4 +1,5 @@
 import { VoiceFallback } from './VoiceFallback';
+import { ChimeSynthesizer } from './ChimeSynthesizer';
 
 export interface SoundPlayerOptions {
   soundFiles: string[];
@@ -19,7 +20,7 @@ export class SoundPlayer {
   private onPlaybackEnd?: () => void;
 
   constructor(options: SoundPlayerOptions) {
-    this.soundFiles = options.soundFiles.length > 0 ? options.soundFiles : ['/sounds/alert-1.mp3'];
+    this.soundFiles = options.soundFiles.length > 0 ? options.soundFiles : ['/sounds/alert-1.wav'];
     this.volume = options.volume;
     this.customAudioUrl = options.customAudioUrl ?? null;
     this.onPlaybackStart = options.onPlaybackStart;
@@ -54,7 +55,8 @@ export class SoundPlayer {
   public unlock(): void {
     try {
       VoiceFallback.unlock();
-      const dummy = new Audio('/sounds/alert-1.mp3');
+      ChimeSynthesizer.getContext();
+      const dummy = new Audio('/sounds/alert-1.wav');
       dummy.volume = 0;
       dummy
         .play()
@@ -62,16 +64,14 @@ export class SoundPlayer {
           dummy.pause();
           dummy.currentTime = 0;
         })
-        .catch(() => {
-          // ignore
-        });
+        .catch(() => {});
     } catch {
       // ignore
     }
   }
 
   /**
-   * 커스텀 등록 음원 우선 재생 -> 로테이션 파일 재생 -> SpeechSynthesis 폴백
+   * 커스텀 등록 음원 우선 재생 -> 로테이션 파일 재생 -> Web Audio Chime & SpeechSynthesis 폴백
    */
   public async playNextAlert(): Promise<void> {
     if (this.isPlaying) return;
@@ -99,8 +99,10 @@ export class SoundPlayer {
       try {
         await this.playAudioFile(soundUrl);
       } catch (audioErr) {
-        console.warn(`[SoundPlayer] Failed to play ${soundUrl}. Falling back to SpeechSynthesis:`, audioErr);
-        // 3. 브라우저 음성 합성 폴백
+        console.warn(`[SoundPlayer] Failed to play ${soundUrl}. Falling back to ChimeSynthesizer & SpeechSynthesis:`, audioErr);
+        // 3. 브라우저 Web Audio API 기반 순수 신디사이저 차임벨 재생 (무조건 출력 보장)
+        await ChimeSynthesizer.playChime(this.volume);
+        // 4. 브라우저 음성 합성 폴백
         await VoiceFallback.speak('조용히 해주세요.', this.volume);
       }
     } finally {

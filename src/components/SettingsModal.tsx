@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { DEFAULT_CONFIG, NoiseConfig } from '../config/defaults';
 import { CustomAudioItem } from '../core/storage/customAudioRepo';
+import { ChimeSynthesizer } from '../core/alert/ChimeSynthesizer';
+import { VoiceFallback } from '../core/alert/VoiceFallback';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -132,33 +134,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   // 3. 미리 듣기 핸들러
-  const handleTogglePreview = () => {
-    if (isPlayingPreview && previewAudioRef.current) {
-      previewAudioRef.current.pause();
-      previewAudioRef.current = null;
+  const handleTogglePreview = async () => {
+    if (isPlayingPreview) {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
       setIsPlayingPreview(false);
       return;
     }
 
-    const soundUrl = customAudioUrl || formData.soundFiles[0] || '/sounds/alert-1.mp3';
-    const audio = new Audio(soundUrl);
-    previewAudioRef.current = audio;
-    audio.volume = formData.volume;
-
-    audio.onended = () => {
-      setIsPlayingPreview(false);
-      previewAudioRef.current = null;
-    };
-    audio.onerror = () => {
-      setIsPlayingPreview(false);
-      previewAudioRef.current = null;
-    };
-
-    audio.play().catch(() => {
-      setIsPlayingPreview(false);
-      previewAudioRef.current = null;
-    });
     setIsPlayingPreview(true);
+
+    try {
+      if (customAudioUrl) {
+        // 커스텀 등록 음원 재생
+        const audio = new Audio(customAudioUrl);
+        previewAudioRef.current = audio;
+        audio.volume = formData.volume;
+
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => resolve(), 8000);
+          audio.onended = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+          audio.onerror = (e) => {
+            clearTimeout(timeout);
+            reject(e);
+          };
+          audio.play().catch((err) => {
+            clearTimeout(timeout);
+            reject(err);
+          });
+        });
+      } else {
+        // 기본 음원: Web Audio API 기반 순수 신디사이저 차임벨(딩동) + TTS 음성
+        await ChimeSynthesizer.playChime(formData.volume);
+        await VoiceFallback.speak('조용히 해주세요.', formData.volume);
+      }
+    } catch (err) {
+      console.warn('[SettingsModal] Preview error, falling back to chime synthesizer:', err);
+      await ChimeSynthesizer.playChime(formData.volume);
+    } finally {
+      setIsPlayingPreview(false);
+      previewAudioRef.current = null;
+    }
   };
 
   return (
@@ -271,7 +292,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button
               type="button"
               onClick={handleTogglePreview}
-              className={`w-full py-2 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 ${
+              className={`w-full py-2.5 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 ${
                 isPlayingPreview
                   ? 'bg-amber-600 border-amber-500 text-white'
                   : 'bg-indigo-900/60 hover:bg-indigo-800/80 border-indigo-700 text-indigo-200'
@@ -280,6 +301,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span>{isPlayingPreview ? '⏹' : '▶'}</span>
               <span>{isPlayingPreview ? '미리 듣기 정지' : '현재 안내 음성 미리 듣기'}</span>
             </button>
+            <p className="text-[11px] text-slate-400 text-center leading-relaxed">
+              💡 아이패드에서 소리가 나지 않는다면 제어 센터의 <strong>무음 모드(종 모양 🔕)</strong>를 해제하고 볼륨을 확인해 주세요.
+            </p>
           </div>
 
           {/* ==================== 기존 소음 판정 설정 항목 ==================== */}

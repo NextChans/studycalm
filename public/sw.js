@@ -5,6 +5,8 @@ const PRECACHE_ASSETS = [
   '/index.html',
   '/manifest.webmanifest',
   '/favicon.ico',
+  '/sounds/alert-1.wav',
+  '/sounds/alert-2.wav',
   '/sounds/alert-1.mp3',
   '/sounds/alert-2.mp3',
 ];

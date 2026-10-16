@@ -31,5 +31,5 @@ export const DEFAULT_CONFIG: NoiseConfig = {
   volume: 0.8,
   emaAlpha: 0.15,
   sampleIntervalMs: 50,
-  soundFiles: ['/sounds/alert-1.mp3', '/sounds/alert-2.mp3'],
+  soundFiles: ['/sounds/alert-1.wav', '/sounds/alert-2.wav'],
 };
