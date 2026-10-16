@@ -3,8 +3,6 @@ import { AudioEngine, AudioEngineError } from '../core/audio/AudioEngine';
 import { NoiseStateMachine } from '../core/machine/NoiseStateMachine';
 import { StateMachineSnapshot } from '../core/machine/types';
 import { SoundPlayer } from '../core/alert/SoundPlayer';
-import { VoiceFallback } from '../core/alert/VoiceFallback';
-import { ChimeSynthesizer } from '../core/alert/ChimeSynthesizer';
 import { CounterRepo } from '../core/storage/counterRepo';
 import { SettingsRepo } from '../core/storage/settingsRepo';
 import { CustomAudioRepo, CustomAudioItem } from '../core/storage/customAudioRepo';
@@ -43,7 +41,7 @@ export function useNoiseMonitor() {
           setCustomAudio(item);
           activeUrl = URL.createObjectURL(item.blob);
           setCustomAudioUrl(activeUrl);
-          playerRef.current?.setCustomAudioUrl(activeUrl);
+          playerRef.current?.setCustomAudio(item.blob, activeUrl);
         }
       })
       .catch((e) => {
@@ -78,7 +76,7 @@ export function useNoiseMonitor() {
         onAlertTriggered: () => {
           const nextCount = CounterRepo.increment();
           setDailyAlertCount(nextCount);
-          playerRef.current?.playNextAlert();
+          void playerRef.current?.playNextAlert();
         },
         onSnapshot: (snap) => {
           setSnapshot(snap);
@@ -123,7 +121,7 @@ export function useNoiseMonitor() {
         URL.revokeObjectURL(prevUrl);
       }
       const newUrl = URL.createObjectURL(item.blob);
-      playerRef.current?.setCustomAudioUrl(newUrl);
+      playerRef.current?.setCustomAudio(item.blob, newUrl);
       return newUrl;
     });
   }, []);
@@ -136,7 +134,7 @@ export function useNoiseMonitor() {
       if (prevUrl) {
         URL.revokeObjectURL(prevUrl);
       }
-      playerRef.current?.setCustomAudioUrl(null);
+      playerRef.current?.setCustomAudio(null, null);
       return null;
     });
   }, []);
@@ -162,12 +160,15 @@ export function useNoiseMonitor() {
 
   const start = useCallback(async () => {
     setAudioError(null);
+    // 터치 제스처의 동기 구간 안에서 먼저 오디오 출력 잠금 해제 (getUserMedia await 이후엔 제스처가 소멸될 수 있음)
+    playerRef.current?.unlock();
     try {
       if (engineRef.current && !engineRef.current.isActive()) {
         await engineRef.current.start();
         setIsAudioRunning(true);
         machineRef.current?.start();
       }
+      // 측정용 AudioContext가 새로 생성되었으므로 해당 컨텍스트도 잠금 해제
       playerRef.current?.unlock();
     } catch {
       // AudioEngine onError already handles the state update
@@ -178,6 +179,9 @@ export function useNoiseMonitor() {
     engineRef.current?.stop();
     machineRef.current?.stop();
     playerRef.current?.stop();
+    // 측정 컨텍스트가 닫혔으므로, 정지 버튼 터치 제스처 안에서 출력 전용 컨텍스트를 다시 활성화
+    // (측정 정지 상태에서도 원격 안내 방송이 출력되도록)
+    playerRef.current?.unlock();
     setIsAudioRunning(false);
   }, []);
 
@@ -185,28 +189,31 @@ export function useNoiseMonitor() {
     machineRef.current?.recalibrate();
   }, []);
 
-  const triggerManualAlert = useCallback(async () => {
+  /** @returns 실제로 재생되었는지 (이미 재생 중이면 false, 카운트도 올리지 않음) */
+  const triggerManualAlert = useCallback(async (): Promise<boolean> => {
+    const player = playerRef.current;
+    if (!player || player.getIsPlaying()) return false;
     const nextCount = CounterRepo.increment();
     setDailyAlertCount(nextCount);
-    await playerRef.current?.playNextAlert();
+    return player.playNextAlert();
   }, []);
 
-  const speakTts = useCallback(
-    async (text: string) => {
-      try {
-        machineRef.current?.notifyPlaybackStarted();
-        // 1. 매장 안내 2음 차임벨 (딩동~) 재생으로 손님 주의 환기 및 Web Audio 출력 활성화
-        await ChimeSynthesizer.playChime(config.volume);
-        // 2. 관리자 맞춤 TTS 멘트 음성 송출
-        await VoiceFallback.speak(text, config.volume);
-      } catch (err) {
-        console.warn('[useNoiseMonitor] Error during speakTts:', err);
-      } finally {
-        machineRef.current?.notifyPlaybackEnded();
-      }
-    },
-    [config.volume]
-  );
+  /** 원격 맞춤 안내 방송 (딩동 차임 → 음성). 재생 중이면 대기열에서 순서대로 재생 */
+  const speakTts = useCallback(async (text: string): Promise<boolean> => {
+    return (await playerRef.current?.playAnnouncement(text)) ?? false;
+  }, []);
+
+  const previewAlert = useCallback(async (volume?: number): Promise<void> => {
+    playerRef.current?.unlock();
+    await playerRef.current?.playPreview(volume);
+  }, []);
+
+  const stopPlayback = useCallback(() => {
+    playerRef.current?.stop();
+  }, []);
+
+  const isOutputReady = useCallback(() => playerRef.current?.isOutputReady() ?? false, []);
+  const isPlaybackActive = useCallback(() => playerRef.current?.getIsPlaying() ?? false, []);
 
   const dismissError = useCallback(() => {
     setAudioError(null);
@@ -232,6 +239,10 @@ export function useNoiseMonitor() {
     recalibrate,
     triggerManualAlert,
     speakTts,
+    previewAlert,
+    stopPlayback,
+    isOutputReady,
+    isPlaybackActive,
     dismissError,
     unlockAudio,
   };

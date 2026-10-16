@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG, NoiseConfig } from '../../config/defaults';
+import { DEFAULT_CONFIG, NoiseConfig, sanitizeTuning } from '../../config/defaults';
 import { STORAGE_KEYS } from './storageKeys';
 
 export class SettingsRepo {
@@ -13,7 +13,7 @@ export class SettingsRepo {
         return { ...DEFAULT_CONFIG };
       }
       const parsed = JSON.parse(stored);
-      return { ...DEFAULT_CONFIG, ...parsed };
+      return { ...DEFAULT_CONFIG, ...parsed, ...sanitizeTuning({ ...DEFAULT_CONFIG, ...parsed }) };
     } catch (e) {
       console.warn('[SettingsRepo] Failed to parse stored settings:', e);
       return { ...DEFAULT_CONFIG };

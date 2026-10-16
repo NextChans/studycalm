@@ -13,16 +13,21 @@ import { RemoteConnectModal } from './components/RemoteConnectModal';
 import { RemoteControllerView } from './components/RemoteControllerView';
 import { FooterNotice } from './components/FooterNotice';
 import { registerServiceWorker, activateWaitingWorker } from './core/pwa/registerServiceWorker';
-import { RoomRepo } from './core/storage/roomRepo';
-import { RemoteClient, BrokerId } from './core/remote/RemoteClient';
+import { useTabletRemote } from './hooks/useTabletRemote';
 
 export const App: React.FC = () => {
-  // 모바일 원격 리모컨 라우트 감지 (/remote 또는 ?room= 또는 ?mode=remote)
-  const isRemoteRoute =
-    typeof window !== 'undefined' &&
-    (window.location.pathname.startsWith('/remote') ||
-      window.location.search.includes('room=') ||
-      window.location.search.includes('mode=remote'));
+  // 모바일 원격 리모컨 라우트 감지 (/remote, #k=페어링키, 구버전 ?room= 링크)
+  const [isRemoteRoute] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const { pathname, search, hash } = window.location;
+    const params = new URLSearchParams(search);
+    return (
+      pathname.startsWith('/remote') ||
+      /(^#|&)k=/.test(hash) ||
+      params.has('room') ||
+      params.get('mode') === 'remote'
+    );
+  });
 
   const {
     config,
@@ -32,7 +37,6 @@ export const App: React.FC = () => {
     audioError,
     isAudioRunning,
     customAudio,
-    customAudioUrl,
     saveCustomAudio,
     deleteCustomAudio,
     start,
@@ -40,35 +44,32 @@ export const App: React.FC = () => {
     recalibrate,
     triggerManualAlert,
     speakTts,
+    previewAlert,
+    stopPlayback,
+    isOutputReady,
+    isPlaybackActive,
     dismissError,
+    unlockAudio,
   } = useNoiseMonitor();
 
   const { isLocked, requestLock, releaseLock } = useWakeLock();
   const { isBackground } = useVisibility();
 
-
-
   // PWA 업데이트 감지 상태
   const [swRegistration, setSwRegistration] = useState<ServiceWorkerRegistration | null>(null);
   const [showUpdateBanner, setShowUpdateBanner] = useState<boolean>(false);
 
-  // 모달 상태
-  const [isPinModalOpen, setIsPinModalOpen] = useState<boolean>(false);
+  // 모달 상태 — 설정/원격 연결 모두 관리자 PIN 인증 후에만 진입
+  // 측정 정지 / 재보정도 관리자 전용 (손님이 경고 시스템을 끄거나 시끄러운 상태로 기준을 재설정하는 것 방지)
+  const [pinTarget, setPinTarget] = useState<'settings' | 'remote' | 'stop' | 'recalibrate' | null>(null);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState<boolean>(false);
 
-  // 원격 통신 (태블릿 호스트)
-  const [roomId, setRoomId] = useState<string>(() => RoomRepo.getOrCreateRoomId());
-  const [isRemoteConnected, setIsRemoteConnected] = useState<boolean>(false);
-  const [activeBroker, setActiveBroker] = useState<BrokerId>('emqx');
-  const [remoteBroadcastText, setRemoteBroadcastText] = useState<string | null>(null);
-  const remoteClientRef = useRef<RemoteClient | null>(null);
-
-  // 최신 텔레메트리 데이터 ref (리렌더링 시 interval 취소 방지)
-  const latestTelemetryRef = useRef({ snapshot, dailyAlertCount, isAudioRunning });
+  // 최신 상태 ref (원격 텔레메트리 콜백에서 사용)
+  const latestTelemetryRef = useRef({ snapshot, dailyAlertCount, isAudioRunning, config });
   useEffect(() => {
-    latestTelemetryRef.current = { snapshot, dailyAlertCount, isAudioRunning };
-  }, [snapshot, dailyAlertCount, isAudioRunning]);
+    latestTelemetryRef.current = { snapshot, dailyAlertCount, isAudioRunning, config };
+  }, [snapshot, dailyAlertCount, isAudioRunning, config]);
 
   // PWA 서비스워커 등록
   useEffect(() => {
@@ -80,102 +81,49 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // 태블릿 원격 통신 수신 클라이언트 초기화
+  // 화면 어디든 첫 터치/클릭/키 입력 시 오디오 출력 잠금 해제
+  // (측정을 시작하지 않은 상태에서도 원격 안내 방송이 나오도록, iOS/Android 자동재생 정책 대응)
   useEffect(() => {
     if (isRemoteRoute) return;
-
-    const client = new RemoteClient(
-      roomId,
-      'tablet',
-      (connected, brokerId) => {
-        setIsRemoteConnected(connected);
-        if (brokerId) {
-          setActiveBroker(brokerId);
-        }
-      },
-      activeBroker
-    );
-    client.connect();
-    remoteClientRef.current = client;
-
-    const unsubscribe = client.onMessage(async (msg) => {
-      if (msg.type === 'ALERT') {
-        setRemoteBroadcastText('🚨 원격 긴급 경고 방송 송출!');
-        // 원격 리모컨으로 방송 시작 상태 ACK 전송
-        remoteClientRef.current?.sendMessage({
-          type: 'BROADCAST_STATUS',
-          status: 'PLAYING',
-          text: '긴급 경고 방송',
-        });
-
-        try {
-          await triggerManualAlert();
-        } finally {
-          // 원격 리모컨으로 방송 완료 상태 ACK 전송
-          remoteClientRef.current?.sendMessage({
-            type: 'BROADCAST_STATUS',
-            status: 'DONE',
-            text: '긴급 경고 방송',
-          });
-          setTimeout(() => setRemoteBroadcastText(null), 3000);
-        }
-      } else if (msg.type === 'TTS') {
-        setRemoteBroadcastText(msg.text);
-        // 원격 리모컨으로 방송 시작 상태 ACK 전송
-        remoteClientRef.current?.sendMessage({
-          type: 'BROADCAST_STATUS',
-          status: 'PLAYING',
-          text: msg.text,
-        });
-
-        try {
-          await speakTts(msg.text);
-        } finally {
-          // 원격 리모컨으로 방송 완료 상태 ACK 전송
-          remoteClientRef.current?.sendMessage({
-            type: 'BROADCAST_STATUS',
-            status: 'DONE',
-            text: msg.text,
-          });
-          setTimeout(() => setRemoteBroadcastText(null), 3000);
-        }
-      } else if (msg.type === 'RECALIBRATE') {
-        recalibrate();
-      }
-    });
-
+    const handler = () => unlockAudio();
+    window.addEventListener('pointerdown', handler, { passive: true });
+    window.addEventListener('keydown', handler);
     return () => {
-      unsubscribe();
-      client.disconnect();
+      window.removeEventListener('pointerdown', handler);
+      window.removeEventListener('keydown', handler);
     };
-  }, [roomId, isRemoteRoute, triggerManualAlert, speakTts, recalibrate, activeBroker]);
+  }, [isRemoteRoute, unlockAudio]);
 
-  // 실시간 텔레메트리 (소음 수치, 카운터) 전송
-  useEffect(() => {
-    if (isRemoteRoute || !remoteClientRef.current || !isRemoteConnected) return;
-
-    const sendTelemetry = () => {
-      const { snapshot: snap, dailyAlertCount: count, isAudioRunning: running } = latestTelemetryRef.current;
-      remoteClientRef.current?.sendMessage({
-        type: 'TELEMETRY',
-        data: {
-          currentDb: snap.currentDb,
-          smoothedDb: snap.smoothedDb,
-          baselineDb: snap.baselineDb,
-          thresholdDb: snap.thresholdDb,
-          state: snap.state,
-          dailyAlertCount: count,
-          isAudioRunning: running,
+  // 태블릿 원격 수신 (다중 중계 + E2E 암호화)
+  const remote = useTabletRemote(!isRemoteRoute, {
+    getTelemetry: () => {
+      const { snapshot: snap, dailyAlertCount: count, isAudioRunning: running, config: cfg } =
+        latestTelemetryRef.current;
+      return {
+        currentDb: snap.currentDb,
+        smoothedDb: snap.smoothedDb,
+        baselineDb: snap.baselineDb,
+        thresholdDb: snap.thresholdDb,
+        state: snap.state,
+        dailyAlertCount: count,
+        isAudioRunning: running,
+        isAudioUnlocked: isOutputReady(),
+        isPlaying: isPlaybackActive(),
+        tuning: {
+          baselineMode: cfg.baselineMode,
+          manualBaselineDb: cfg.manualBaselineDb,
+          thresholdMode: cfg.thresholdMode,
+          absoluteThresholdDb: cfg.absoluteThresholdDb,
+          thresholdOffsetDb: cfg.thresholdOffsetDb,
         },
-      });
-    };
-
-    // 연결 즉시 1회 전송 후 1초 주기로 전송
-    sendTelemetry();
-    const timer = setInterval(sendTelemetry, 1000);
-
-    return () => clearInterval(timer);
-  }, [isRemoteConnected, isRemoteRoute]);
+      };
+    },
+    onAlert: triggerManualAlert,
+    onTts: speakTts,
+    onRecalibrate: recalibrate,
+    onAdjust: updateConfig,
+    onStop: stopPlayback,
+  });
 
   const handleApplyUpdate = useCallback(() => {
     if (swRegistration) {
@@ -186,26 +134,22 @@ export const App: React.FC = () => {
   // 측정 시작 시 Wake Lock 요청, 정지 시 해제
   const handleToggleStart = async () => {
     if (isAudioRunning) {
-      stop();
-      await releaseLock();
+      setPinTarget('stop');
     } else {
       await start();
       await requestLock();
     }
   };
 
-  const handleOpenSettings = () => {
-    setIsPinModalOpen(true);
-  };
-
   const handlePinAuthenticated = () => {
-    setIsPinModalOpen(false);
-    setIsSettingsModalOpen(true);
-  };
-
-  const handleRegenerateRoomId = () => {
-    const newId = RoomRepo.regenerateRoomId();
-    setRoomId(newId);
+    if (pinTarget === 'settings') setIsSettingsModalOpen(true);
+    if (pinTarget === 'remote') setIsRemoteModalOpen(true);
+    if (pinTarget === 'stop') {
+      stop();
+      void releaseLock();
+    }
+    if (pinTarget === 'recalibrate') recalibrate();
+    setPinTarget(null);
   };
 
   // 모바일 원격 리모컨 뷰 렌더링
@@ -225,12 +169,12 @@ export const App: React.FC = () => {
           onRetry={handleToggleStart}
         />
         {/* 원격 맞춤 멘트 방송 시 태블릿 화면 팝업 배너 */}
-        {remoteBroadcastText && (
+        {remote.broadcastText && (
           <div className="p-4 rounded-2xl bg-indigo-950/95 border-2 border-indigo-500 shadow-2xl shadow-indigo-900/50 flex items-center gap-4 animate-bounce">
             <span className="text-3xl">📢</span>
             <div className="flex flex-col">
               <span className="text-xs font-bold text-indigo-300">매장 관리자 원격 안내 방송</span>
-              <span className="text-xl font-black text-white">{remoteBroadcastText}</span>
+              <span className="text-xl font-black text-white">{remote.broadcastText}</span>
             </div>
           </div>
         )}
@@ -273,16 +217,19 @@ export const App: React.FC = () => {
 
           {/* 스마트폰 원격 리모컨 연결 버튼 */}
           <button
-            onClick={() => setIsRemoteModalOpen(true)}
+            onClick={() => setPinTarget('remote')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-800 text-xs font-bold transition shadow"
           >
             <span>📱</span>
             <span className="hidden sm:inline">원격 리모컨</span>
             <span
               className={`w-1.5 h-1.5 rounded-full ${
-                isRemoteConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'
+                remote.isConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'
               }`}
             />
+            {remote.remoteCount > 0 && (
+              <span className="text-[10px] text-emerald-300 font-mono">{remote.remoteCount}</span>
+            )}
           </button>
 
           {/* 오늘 경고 횟수 카운터 */}
@@ -295,7 +242,7 @@ export const App: React.FC = () => {
 
           {/* 관리자 설정 버튼 */}
           <button
-            onClick={handleOpenSettings}
+            onClick={() => setPinTarget('settings')}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-xs font-bold text-slate-200 border border-slate-700 shadow transition"
           >
             <span>🔐</span>
@@ -352,8 +299,8 @@ export const App: React.FC = () => {
             {/* 배경소음 재보정 버튼 */}
             {isAudioRunning && (
               <button
-                onClick={recalibrate}
-                disabled={snapshot.state === 'CALIBRATING'}
+                onClick={() => setPinTarget('recalibrate')}
+                disabled={snapshot.state === 'CALIBRATING' || config.baselineMode === 'manual'}
                 className="flex items-center gap-2 px-5 py-4 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 disabled:opacity-50 text-slate-200 font-bold text-sm border border-slate-700 shadow-lg transition"
               >
                 <span>🔄</span>
@@ -366,8 +313,8 @@ export const App: React.FC = () => {
 
       {/* 모달 컴포넌트 */}
       <AdminPinModal
-        isOpen={isPinModalOpen}
-        onClose={() => setIsPinModalOpen(false)}
+        isOpen={pinTarget !== null}
+        onClose={() => setPinTarget(null)}
         onSuccess={handlePinAuthenticated}
       />
 
@@ -376,25 +323,27 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsModalOpen(false)}
         config={config}
         customAudio={customAudio}
-        customAudioUrl={customAudioUrl}
         onSave={updateConfig}
         onRecalibrate={recalibrate}
+        activeBaselineDb={snapshot.baselineDb}
+        liveDb={isAudioRunning ? snapshot.smoothedDb : null}
         onSaveCustomAudio={saveCustomAudio}
         onDeleteCustomAudio={deleteCustomAudio}
+        onPreview={previewAlert}
+        onStopPreview={stopPlayback}
       />
 
       <RemoteConnectModal
         isOpen={isRemoteModalOpen}
         onClose={() => setIsRemoteModalOpen(false)}
-        roomId={roomId}
-        isConnected={isRemoteConnected}
-        activeBroker={activeBroker}
-        onToggleBroker={() => {
-          const next: BrokerId = activeBroker === 'emqx' ? 'hivemq' : 'emqx';
-          setActiveBroker(next);
-          remoteClientRef.current?.setBroker(next);
-        }}
-        onRegenerateRoomId={handleRegenerateRoomId}
+        pairingKey={remote.pairingKey}
+        tabletName={remote.tabletName}
+        onRenameTablet={remote.setTabletName}
+        fingerprint={remote.fingerprint}
+        statuses={remote.statuses}
+        remoteCount={remote.remoteCount}
+        initError={remote.initError}
+        onRotateKey={remote.rotateKey}
       />
 
       {/* 하단 안심 문구 (고정) */}

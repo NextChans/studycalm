@@ -50,15 +50,63 @@ export class PinAuth {
   }
 
   /**
-   * 입력된 PIN 검증
+   * 입력된 PIN 검증 (잠금 중이면 검증하지 않고 false)
    */
-  public static async verifyPin(pin: string): Promise<boolean> {
+  public static async verifyPin(pin: string, now: number = Date.now()): Promise<boolean> {
     const savedHash = localStorage.getItem(STORAGE_KEYS.PIN_HASH);
     if (!savedHash) {
       return false;
     }
+    if (this.getLockoutRemainingMs(now) > 0) {
+      return false;
+    }
     const inputHash = await this.hashPin(pin);
-    return savedHash === inputHash;
+    const ok = savedHash === inputHash;
+    this.recordAttempt(ok, now);
+    return ok;
+  }
+
+  // ------------------------------------------------------------ 무차별 대입 방지
+  // 4자리 PIN(1만 가지)은 잠금 없이는 매장 손님이 수 분 내에 뚫을 수 있다.
+  // 5회 연속 실패마다 잠금 시간이 1분 → 2분 → 4분 … 최대 60분으로 늘어난다.
+
+  private static readonly FREE_ATTEMPTS = 5;
+  private static readonly BASE_LOCK_MS = 60_000;
+  private static readonly MAX_LOCK_MS = 60 * 60_000;
+
+  private static readLockout(): { failures: number; lockedUntil: number } {
+    try {
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEYS.PIN_LOCKOUT) ?? '{}') as {
+        failures?: unknown;
+        lockedUntil?: unknown;
+      };
+      return {
+        failures: typeof raw.failures === 'number' ? raw.failures : 0,
+        lockedUntil: typeof raw.lockedUntil === 'number' ? raw.lockedUntil : 0,
+      };
+    } catch {
+      return { failures: 0, lockedUntil: 0 };
+    }
+  }
+
+  private static recordAttempt(success: boolean, now: number): void {
+    if (success) {
+      localStorage.removeItem(STORAGE_KEYS.PIN_LOCKOUT);
+      return;
+    }
+    const state = this.readLockout();
+    const failures = state.failures + 1;
+    let lockedUntil = state.lockedUntil;
+    if (failures % this.FREE_ATTEMPTS === 0) {
+      const rounds = failures / this.FREE_ATTEMPTS - 1;
+      lockedUntil = now + Math.min(this.MAX_LOCK_MS, this.BASE_LOCK_MS * 2 ** rounds);
+    }
+    localStorage.setItem(STORAGE_KEYS.PIN_LOCKOUT, JSON.stringify({ failures, lockedUntil }));
+  }
+
+  /** 남은 잠금 시간 (ms). 0이면 입력 가능 */
+  public static getLockoutRemainingMs(now: number = Date.now()): number {
+    return Math.max(0, this.readLockout().lockedUntil - now);
   }
 
   /**

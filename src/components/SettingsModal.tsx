@@ -1,19 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { DEFAULT_CONFIG, NoiseConfig } from '../config/defaults';
 import { CustomAudioItem } from '../core/storage/customAudioRepo';
-import { ChimeSynthesizer } from '../core/alert/ChimeSynthesizer';
-import { VoiceFallback } from '../core/alert/VoiceFallback';
+import { TuningControls } from './TuningControls';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: NoiseConfig;
   customAudio: CustomAudioItem | null;
-  customAudioUrl: string | null;
   onSave: (newConfig: Partial<NoiseConfig>) => void;
   onRecalibrate: () => void;
+  /** 현재 적용 중인 기준값 / 실시간 소음 (조정 시 참고용) */
+  activeBaselineDb: number | null;
+  liveDb: number | null;
   onSaveCustomAudio: (blob: Blob, name: string) => Promise<void>;
   onDeleteCustomAudio: () => Promise<void>;
+  /** 현재 설정된 경고음 미리듣기 (실제 경고와 동일한 재생 경로) */
+  onPreview: (volume: number) => Promise<void>;
+  onStopPreview: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -21,18 +25,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   config,
   customAudio,
-  customAudioUrl,
   onSave,
   onRecalibrate,
+  activeBaselineDb,
+  liveDb,
   onSaveCustomAudio,
   onDeleteCustomAudio,
+  onPreview,
+  onStopPreview,
 }) => {
   const [formData, setFormData] = useState<NoiseConfig>({ ...config });
   const [saveToast, setSaveToast] = useState(false);
 
   // 음원 미리듣기 상태
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
-  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // 음원 녹음 상태
   const [isRecording, setIsRecording] = useState(false);
@@ -43,12 +49,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // 모달을 열 때마다 저장된 최신 설정으로 폼을 초기화 (취소 후 재진입 시 미저장 값이 남는 문제 방지)
+  useEffect(() => {
+    if (isOpen) setFormData({ ...config });
+  }, [isOpen, config]);
+
   useEffect(() => {
     return () => {
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
-        previewAudioRef.current = null;
-      }
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
       }
@@ -133,76 +140,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  // 3. 미리 듣기 핸들러
+  // 3. 미리 듣기 핸들러 (저장 전 슬라이더 볼륨으로 재생)
   const handleTogglePreview = async () => {
     if (isPlayingPreview) {
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
-        previewAudioRef.current = null;
-      }
+      onStopPreview();
       setIsPlayingPreview(false);
       return;
     }
 
     setIsPlayingPreview(true);
-
     try {
-      if (customAudioUrl) {
-        // 커스텀 등록 음원 재생
-        const audio = new Audio(customAudioUrl);
-        previewAudioRef.current = audio;
-        audio.volume = formData.volume;
-
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => resolve(), 8000);
-          audio.onended = () => {
-            clearTimeout(timeout);
-            resolve();
-          };
-          audio.onerror = (e) => {
-            clearTimeout(timeout);
-            reject(e);
-          };
-          audio.play().catch((err) => {
-            clearTimeout(timeout);
-            reject(err);
-          });
-        });
-      } else {
-        // 기본 음원: 설정된 기본 오디오 파일(/sounds/alert-1.wav) 재생
-        const soundUrl = formData.soundFiles?.[0] || '/sounds/alert-1.wav';
-        const audio = new Audio(soundUrl);
-        previewAudioRef.current = audio;
-        audio.volume = formData.volume;
-        audio.setAttribute('playsinline', '');
-
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => resolve(), 8000);
-            audio.onended = () => {
-              clearTimeout(timeout);
-              resolve();
-            };
-            audio.onerror = (e) => {
-              clearTimeout(timeout);
-              reject(e);
-            };
-            audio.play().catch((err) => {
-              clearTimeout(timeout);
-              reject(err);
-            });
-          });
-        } catch (audioErr) {
-          console.warn('[SettingsModal] Audio file failed, falling back to synthesizer & TTS:', audioErr);
-          await ChimeSynthesizer.playChime(formData.volume);
-          await VoiceFallback.speak('조용히 해주세요.', formData.volume);
-        }
-      }
+      await onPreview(formData.volume);
     } catch (err) {
       console.warn('[SettingsModal] Preview error:', err);
     } finally {
       setIsPlayingPreview(false);
-      previewAudioRef.current = null;
     }
   };
 
@@ -332,29 +284,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* ==================== 기존 소음 판정 설정 항목 ==================== */}
 
-          {/* 1. 임계치 오프셋 N dB */}
-          <div className="flex flex-col gap-1.5 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-            <div className="flex justify-between items-center">
-              <label className="font-semibold text-slate-200">
-                임계치 오프셋 (N dB)
-              </label>
-              <span className="font-mono font-bold text-amber-400">
-                +{formData.thresholdOffsetDb} dB
-              </span>
-            </div>
-            <p className="text-xs text-slate-400">
-              배경소음 기준선(Baseline)보다 몇 dB 높을 때 소음 초과로 판정할지 설정합니다.
-            </p>
-            <input
-              type="range"
-              min={5}
-              max={30}
-              step={1}
-              value={formData.thresholdOffsetDb}
-              onChange={(e) => handleChange('thresholdOffsetDb', Number(e.target.value))}
-              className="accent-amber-400 cursor-pointer"
-            />
-          </div>
+          {/* 1. 기준 / 임계치 (자동·수동) */}
+          <TuningControls
+            value={formData}
+            onChange={(patch) => setFormData((prev) => ({ ...prev, ...patch }))}
+            activeBaselineDb={activeBaselineDb}
+            liveDb={liveDb}
+          />
 
           {/* 2. 초과 지속 시간 (sustainMs) */}
           <div className="flex flex-col gap-1.5 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
@@ -483,11 +419,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </button>
             <button
               type="button"
+              disabled={config.baselineMode === 'manual'}
+              title={config.baselineMode === 'manual' ? '수동 기준 모드에서는 재보정하지 않습니다' : undefined}
               onClick={() => {
                 onRecalibrate();
                 onClose();
               }}
-              className="px-3 py-2 rounded-xl bg-sky-900/60 hover:bg-sky-800 text-xs font-semibold text-sky-200 transition"
+              className="disabled:opacity-40 px-3 py-2 rounded-xl bg-sky-900/60 hover:bg-sky-800 text-xs font-semibold text-sky-200 transition"
             >
               배경소음 즉시 재보정
             </button>

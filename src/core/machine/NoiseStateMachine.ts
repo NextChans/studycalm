@@ -36,7 +36,18 @@ export class NoiseStateMachine {
   }
 
   public updateConfig(newConfig: Partial<NoiseConfig>): void {
+    const prev = this.config;
     this.config = { ...this.config, ...newConfig };
+    if (this.state === 'IDLE') return;
+
+    // 기준 방식/값이 바뀌면 측정 중에도 즉시 반영
+    if (this.config.baselineMode === 'manual') {
+      if (prev.baselineMode !== 'manual' || prev.manualBaselineDb !== this.config.manualBaselineDb) {
+        this.applyManualBaseline();
+      }
+    } else if (prev.baselineMode === 'manual') {
+      this.startCalibration();
+    }
   }
 
   public getConfig(): Readonly<NoiseConfig> {
@@ -59,15 +70,29 @@ export class NoiseStateMachine {
   }
 
   public getThreshold(): number | null {
+    if (this.config.thresholdMode === 'absolute') return this.config.absoluteThresholdDb;
     if (this.baselineDb === null) return null;
     return this.baselineDb + this.config.thresholdOffsetDb;
   }
 
   /**
-   * 측정 시작 -> CALIBRATING 상태 진입
+   * 측정 시작 -> 자동 기준이면 CALIBRATING, 수동 기준이면 즉시 MONITORING
    */
   public start(): void {
-    this.startCalibration();
+    if (this.config.baselineMode === 'manual') {
+      this.applyManualBaseline();
+    } else {
+      this.startCalibration();
+    }
+  }
+
+  private applyManualBaseline(): void {
+    this.calibrationSamples = [];
+    this.setBaseline(this.config.manualBaselineDb);
+    if (this.state === 'IDLE' || this.state === 'CALIBRATING') {
+      this.resetTransientStates();
+      this.transitionTo('MONITORING');
+    }
   }
 
   /**
@@ -83,6 +108,11 @@ export class NoiseStateMachine {
    */
   public recalibrate(): void {
     if (this.state === 'IDLE') return;
+    // 수동 기준 모드에서는 측정값으로 덮어쓰지 않는다
+    if (this.config.baselineMode === 'manual') {
+      this.applyManualBaseline();
+      return;
+    }
     this.startCalibration();
   }
 
