@@ -2,7 +2,13 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { parsePairingLink } from '../core/remote/pairing';
 import { MAX_TTS_TEXT_LENGTH, RemoteCommand, TabletEvent } from '../core/remote/remoteTypes';
 import { PairingRepo, RemotePairing } from '../core/storage/pairingRepo';
-import { NoiseTuning } from '../config/defaults';
+import {
+  AlertVoiceMode,
+  AlertVoiceSettings,
+  MAX_ALERT_PHRASES,
+  NoiseTuning,
+  sanitizeAlertVoice,
+} from '../config/defaults';
 import { TabletLinkState, useRemoteFleet } from '../hooks/useRemoteFleet';
 import { TuningControls } from './TuningControls';
 import { VoiceRecorder } from './VoiceRecorder';
@@ -742,6 +748,17 @@ export const RemoteControllerView: React.FC = () => {
           </div>
         )}
 
+        {selected !== ALL && selectedOnline && selectedLink?.telemetry?.alertVoice && (
+          <RemoteAlertVoicePanel
+            key={`alert-voice-${selected}`}
+            current={selectedLink.telemetry.alertVoice}
+            presets={presets}
+            onSave={(settings) =>
+              sendToTargets({ type: 'SET_ALERT_VOICE', settings }, '🔔 자동 경고 음성 설정을 저장했습니다.')
+            }
+          />
+        )}
+
         {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
           <RemoteSchedulePanel
             key={`schedule-${selected}`}
@@ -768,6 +785,168 @@ export const RemoteControllerView: React.FC = () => {
       <footer className="mt-auto pt-3 border-t border-slate-900 text-center text-[10px] text-slate-500">
         StudyCalm 원격 제어 · 종단간 암호화
       </footer>
+    </div>
+  );
+};
+
+const ALERT_VOICE_MODES: { mode: AlertVoiceMode; label: string; desc: string }[] = [
+  { mode: 'sound', label: '🔔 기본 경고음', desc: '경고음 파일(또는 등록한 녹음)을 재생합니다.' },
+  { mode: 'fixed', label: '📌 특정 멘트', desc: '선택한 멘트 하나만 "딩동 → 음성"으로 재생합니다.' },
+  { mode: 'random', label: '🔀 랜덤 롤링', desc: '선택한 멘트 중 무작위로 재생합니다 (같은 멘트 연속 방지).' },
+];
+
+/**
+ * 선택한 태블릿의 자동 경고 음성 설정 (기본 경고음 / 특정 멘트 고정 / 멘트 랜덤 롤링)
+ */
+const RemoteAlertVoicePanel: React.FC<{
+  current: AlertVoiceSettings;
+  presets: string[];
+  onSave: (settings: AlertVoiceSettings) => Promise<void>;
+}> = ({ current, presets, onSave }) => {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<AlertVoiceSettings>(current);
+  const [dirty, setDirty] = useState(false);
+  const [customInput, setCustomInput] = useState('');
+
+  useEffect(() => {
+    if (!dirty) setDraft(current);
+  }, [current, dirty]);
+
+  const patch = (p: Partial<AlertVoiceSettings>) => {
+    setDraft((prev) => ({ ...prev, ...p }));
+    setDirty(true);
+  };
+
+  // 선택지: 리모컨 프리셋 + 태블릿에 이미 저장된 멘트 (중복 제거)
+  const options = [...new Set([...presets, ...current.alertPhrases, current.alertFixedPhrase].filter(Boolean))];
+  const togglePhrase = (text: string) => {
+    const has = draft.alertPhrases.includes(text);
+    if (!has && draft.alertPhrases.length >= MAX_ALERT_PHRASES) return;
+    patch({ alertPhrases: has ? draft.alertPhrases.filter((p) => p !== text) : [...draft.alertPhrases, text] });
+  };
+  const addCustom = () => {
+    const text = customInput.trim();
+    if (!text) return;
+    if (draft.alertVoiceMode === 'fixed') patch({ alertFixedPhrase: text });
+    else if (!draft.alertPhrases.includes(text) && draft.alertPhrases.length < MAX_ALERT_PHRASES)
+      patch({ alertPhrases: [...draft.alertPhrases, text] });
+    setCustomInput('');
+  };
+  const summary =
+    current.alertVoiceMode === 'sound'
+      ? '기본 경고음'
+      : current.alertVoiceMode === 'fixed'
+        ? `특정 멘트 · "${current.alertFixedPhrase}"`
+        : `랜덤 롤링 · ${current.alertPhrases.length}개`;
+  const invalid = draft.alertVoiceMode === 'random' && draft.alertPhrases.length === 0;
+
+  return (
+    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
+      <button onClick={() => setOpen((v) => !v)} className="flex justify-between items-center text-left gap-2">
+        <span className="text-xs font-bold text-slate-200 shrink-0">🔔 자동 경고 음성</span>
+        <span className="text-[11px] text-slate-400 truncate">{open ? '접기' : summary}</span>
+      </button>
+      {open && (
+        <>
+          <div className="grid grid-cols-3 gap-1.5">
+            {ALERT_VOICE_MODES.map((m) => (
+              <button
+                key={m.mode}
+                onClick={() => patch({ alertVoiceMode: m.mode })}
+                className={`py-2 rounded-lg text-[11px] font-bold transition ${
+                  draft.alertVoiceMode === m.mode ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-slate-400">{ALERT_VOICE_MODES.find((m) => m.mode === draft.alertVoiceMode)?.desc}</p>
+
+          {draft.alertVoiceMode !== 'sound' && (
+            <div className="flex flex-col gap-1.5">
+              {options.map((text) => {
+                const checked =
+                  draft.alertVoiceMode === 'fixed' ? draft.alertFixedPhrase === text : draft.alertPhrases.includes(text);
+                return (
+                  <label
+                    key={text}
+                    className={`flex items-start gap-2 p-2 rounded-lg border text-xs cursor-pointer ${
+                      checked ? 'border-indigo-500 bg-indigo-950/40 text-white' : 'border-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <input
+                      type={draft.alertVoiceMode === 'fixed' ? 'radio' : 'checkbox'}
+                      name="alert-fixed"
+                      checked={checked}
+                      onChange={() =>
+                        draft.alertVoiceMode === 'fixed' ? patch({ alertFixedPhrase: text }) : togglePhrase(text)
+                      }
+                      className="mt-0.5 accent-indigo-500"
+                    />
+                    <span>{text}</span>
+                  </label>
+                );
+              })}
+              {draft.alertVoiceMode === 'fixed' && !options.includes(draft.alertFixedPhrase) && draft.alertFixedPhrase && (
+                <p className="text-[11px] text-indigo-300">선택: "{draft.alertFixedPhrase}"</p>
+              )}
+              {draft.alertVoiceMode === 'random' &&
+                draft.alertPhrases
+                  .filter((p) => !options.includes(p))
+                  .map((p) => (
+                    <p key={p} className="text-[11px] text-indigo-300">
+                      ✔ "{p}"{' '}
+                      <button onClick={() => togglePhrase(p)} className="underline text-rose-300">
+                        빼기
+                      </button>
+                    </p>
+                  ))}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={customInput}
+                  maxLength={MAX_TTS_TEXT_LENGTH}
+                  placeholder="직접 입력해 추가"
+                  onChange={(e) => setCustomInput(e.target.value)}
+                  className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+                <button onClick={addCustom} className="px-3 rounded-xl bg-slate-800 text-xs text-indigo-300 shrink-0">
+                  {draft.alertVoiceMode === 'fixed' ? '선택' : '추가'}
+                </button>
+              </div>
+              {draft.alertVoiceMode === 'random' && (
+                <p className="text-[10px] text-slate-500">
+                  {draft.alertPhrases.length}/{MAX_ALERT_PHRASES}개 선택
+                  {invalid && ' — 1개 이상 선택해주세요'}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => void onSave(sanitizeAlertVoice(draft)).then(() => setDirty(false))}
+              disabled={!dirty || invalid}
+              className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white"
+            >
+              저장
+            </button>
+            {dirty && (
+              <button
+                onClick={() => {
+                  setDraft(current);
+                  setDirty(false);
+                }}
+                className="px-3 py-2 rounded-xl bg-slate-800 text-xs text-slate-300"
+              >
+                취소
+              </button>
+            )}
+          </div>
+          <p className="text-[10px] text-slate-500">저장 후 위의 "즉시 주의 방송"으로 실제 소리를 확인할 수 있습니다.</p>
+        </>
+      )}
     </div>
   );
 };

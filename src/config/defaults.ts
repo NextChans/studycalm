@@ -1,9 +1,20 @@
 import type { ScheduleRule } from '../core/schedule/schedule';
 
 export type BaselineMode = 'auto' | 'manual';
+/** 자동 경고 음성: sound=경고음 파일/등록 녹음, fixed=특정 멘트 고정, random=멘트 랜덤 롤링 */
+export type AlertVoiceMode = 'sound' | 'fixed' | 'random';
+
+export const MAX_ALERT_PHRASES = 6;
+export const MAX_ALERT_PHRASE_LENGTH = 120;
 export type ThresholdMode = 'offset' | 'absolute';
 
 export interface NoiseConfig {
+  /** 자동 경고 음성 방식 */
+  alertVoiceMode: AlertVoiceMode;
+  /** fixed: 이 멘트만 반복 */
+  alertFixedPhrase: string;
+  /** random: 이 멘트들 중 무작위 (연속 중복 방지) */
+  alertPhrases: string[];
   /** 숨김 설치용 검은 화면 모드 (화면은 켜진 채 검은 화면만 표시) */
   stealthMode: boolean;
   /** 시간대별 운영 스케줄 (음소거 / 임계치 변경) */
@@ -43,6 +54,9 @@ export interface NoiseConfig {
 export const DB_RANGE = { min: -90, max: 0 } as const;
 
 export const DEFAULT_CONFIG: NoiseConfig = {
+  alertVoiceMode: 'sound',
+  alertFixedPhrase: '조용히 해주세요.',
+  alertPhrases: [],
   stealthMode: false,
   schedule: [],
   autoAlertMuted: false,
@@ -87,4 +101,24 @@ export function sanitizeTuning(input: Partial<Record<keyof NoiseTuning, unknown>
   const off = num(input.thresholdOffsetDb);
   if (off !== null) out.thresholdOffsetDb = Math.round(clamp(off, 1, 40));
   return out;
+}
+
+export type AlertVoiceSettings = Pick<NoiseConfig, 'alertVoiceMode' | 'alertFixedPhrase' | 'alertPhrases'>;
+
+const cleanPhrase = (v: unknown) =>
+  typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, MAX_ALERT_PHRASE_LENGTH) : '';
+
+/**
+ * 자동 경고 음성 설정 정규화 (원격 입력·저장값).
+ * 멘트가 비어 있어 선택한 모드를 쓸 수 없으면 기본 경고음(sound)으로 되돌린다.
+ */
+export function sanitizeAlertVoice(input: Partial<Record<keyof AlertVoiceSettings, unknown>>): AlertVoiceSettings {
+  const phrases = Array.isArray(input.alertPhrases)
+    ? [...new Set(input.alertPhrases.map(cleanPhrase).filter(Boolean))].slice(0, MAX_ALERT_PHRASES)
+    : [];
+  const fixed = cleanPhrase(input.alertFixedPhrase) || DEFAULT_CONFIG.alertFixedPhrase;
+  let mode: AlertVoiceMode =
+    input.alertVoiceMode === 'fixed' || input.alertVoiceMode === 'random' ? input.alertVoiceMode : 'sound';
+  if (mode === 'random' && phrases.length === 0) mode = 'sound';
+  return { alertVoiceMode: mode, alertFixedPhrase: fixed, alertPhrases: phrases };
 }

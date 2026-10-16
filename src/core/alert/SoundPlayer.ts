@@ -52,6 +52,13 @@ export class SoundPlayer {
   private customBuffer: { blob: Blob; buffer: Promise<AudioBuffer> } | null = null;
   private readonly ttsBuffers = new Map<string, Promise<AudioBuffer>>();
 
+  private alertVoice: { mode: 'sound' | 'fixed' | 'random'; fixed: string; phrases: string[] } = {
+    mode: 'sound',
+    fixed: '',
+    phrases: [],
+  };
+  private lastAlertPhrase: string | null = null;
+
   private queue: Promise<void> = Promise.resolve();
   private pending = 0;
   private generation = 0;
@@ -72,6 +79,34 @@ export class SoundPlayer {
     if (files.length > 0) {
       this.soundFiles = files;
     }
+  }
+
+  /**
+   * 자동 경고 음성 방식 설정. 멘트 모드는 경고 순간 지연이 없도록 음성을 미리 받아둔다.
+   */
+  public setAlertVoice(settings: { mode: 'sound' | 'fixed' | 'random'; fixed: string; phrases: string[] }): void {
+    this.alertVoice = settings;
+    for (const text of this.alertVoiceTexts()) {
+      this.getTtsBuffer(text).catch(() => {});
+    }
+  }
+
+  private alertVoiceTexts(): string[] {
+    const v = this.alertVoice;
+    if (v.mode === 'fixed') return v.fixed ? [v.fixed] : [];
+    if (v.mode === 'random') return v.phrases;
+    return [];
+  }
+
+  /** 이번 경고에 사용할 멘트 (random은 직전과 다른 멘트) */
+  private pickAlertPhrase(): string | null {
+    const texts = this.alertVoiceTexts();
+    if (texts.length === 0) return null;
+    if (texts.length === 1) return texts[0];
+    const candidates = texts.filter((t) => t !== this.lastAlertPhrase);
+    const picked = candidates[Math.floor(Math.random() * candidates.length)];
+    this.lastAlertPhrase = picked;
+    return picked;
   }
 
   public setCustomAudio(blob: Blob | null, url: string | null): void {
@@ -136,6 +171,13 @@ export class SoundPlayer {
   }
 
   private async playConfiguredAlert(gen: number): Promise<void> {
+    // 멘트 모드: 딩동 차임 → 선택된 멘트 음성
+    const phrase = this.pickAlertPhrase();
+    if (phrase) {
+      await ChimeSynthesizer.playChime(this.volume);
+      if (gen === this.generation) await this.speak(phrase, this.getTtsBuffer(phrase), gen);
+      return;
+    }
     if (this.customAudio) {
       try {
         await this.playCustom(gen);
