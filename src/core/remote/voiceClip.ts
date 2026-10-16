@@ -21,7 +21,8 @@ export const VOICE_CHUNK_INTERVAL_MS = 120;
 const ASSEMBLY_TIMEOUT_MS = 30_000;
 const MAX_PENDING_CLIPS = 4;
 
-export type VoiceMode = 'play' | 'save';
+/** play: 즉시 방송, save: 경고음으로 등록, announce: 정시 안내 규칙(slot)에 녹음 등록 */
+export type VoiceMode = 'play' | 'save' | 'announce';
 
 export interface VoiceChunk {
   type: 'VOICE_CHUNK';
@@ -30,6 +31,8 @@ export interface VoiceChunk {
   total: number;
   mime: string;
   mode: VoiceMode;
+  /** mode=announce일 때 대상 스케줄 규칙 id */
+  slot?: string;
   data: string;
 }
 
@@ -61,7 +64,8 @@ export function newClipId(): string {
 export async function splitVoiceClip(
   blob: Blob,
   mode: VoiceMode,
-  clipId: string = newClipId()
+  clipId: string = newClipId(),
+  slot?: string
 ): Promise<VoiceChunk[]> {
   if (blob.size === 0) throw new Error('녹음된 음성이 없습니다.');
   if (blob.size > MAX_VOICE_BYTES) throw new Error('녹음 파일이 너무 큽니다. 더 짧게 녹음해주세요.');
@@ -72,7 +76,16 @@ export async function splitVoiceClip(
   const chunks: VoiceChunk[] = [];
   for (let seq = 0; seq < total; seq++) {
     const part = bytes.subarray(seq * VOICE_CHUNK_BYTES, (seq + 1) * VOICE_CHUNK_BYTES);
-    chunks.push({ type: 'VOICE_CHUNK', clipId, seq, total, mime, mode, data: bytesToBase64Url(part) });
+    chunks.push({
+      type: 'VOICE_CHUNK',
+      clipId,
+      seq,
+      total,
+      mime,
+      mode,
+      ...(slot ? { slot } : {}),
+      data: bytesToBase64Url(part),
+    });
   }
   return chunks;
 }
@@ -80,6 +93,7 @@ export async function splitVoiceClip(
 export interface AssembledClip {
   clipId: string;
   mode: VoiceMode;
+  slot?: string;
   blob: Blob;
   /** 보낸 리모컨 기기 */
   senderId: string;
@@ -88,6 +102,7 @@ export interface AssembledClip {
 interface PendingClip {
   senderId: string;
   mode: VoiceMode;
+  slot?: string;
   mime: string;
   total: number;
   parts: (Uint8Array | undefined)[];
@@ -116,6 +131,7 @@ export class VoiceClipAssembler {
       clip = {
         senderId,
         mode: chunk.mode,
+        slot: chunk.slot,
         mime: chunk.mime,
         total: chunk.total,
         parts: new Array(chunk.total),
@@ -126,7 +142,14 @@ export class VoiceClipAssembler {
     }
 
     // 다른 기기가 같은 clipId를 덮어쓰거나 메타데이터가 바뀌는 것을 거부
-    if (clip.senderId !== senderId || clip.total !== chunk.total || chunk.seq >= clip.total) return null;
+    if (
+      clip.senderId !== senderId ||
+      clip.total !== chunk.total ||
+      clip.slot !== chunk.slot ||
+      chunk.seq >= clip.total
+    ) {
+      return null;
+    }
     if (clip.parts[chunk.seq]) return null;
 
     let part: Uint8Array;
@@ -142,7 +165,7 @@ export class VoiceClipAssembler {
 
     this.pending.delete(chunk.clipId);
     const blob = new Blob(clip.parts as Uint8Array[], { type: clip.mime });
-    return { clipId: chunk.clipId, mode: clip.mode, blob, senderId };
+    return { clipId: chunk.clipId, mode: clip.mode, slot: clip.slot, blob, senderId };
   }
 
   public pendingCount(): number {

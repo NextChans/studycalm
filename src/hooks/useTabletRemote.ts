@@ -30,6 +30,10 @@ export interface TabletRemoteHandlers {
   onStartMonitoring: () => Promise<void>;
   onStopMonitoring: () => void;
   onSetSchedule: (rules: ScheduleRule[]) => void;
+  /** 정시 안내 규칙에 녹음 등록 (재생 불가 형식이면 false) */
+  onSaveAnnounceClip: (ruleId: string, blob: Blob) => Promise<boolean>;
+  /** 정시 안내 규칙 즉시 방송 (미리 듣기) */
+  onPlayAnnouncement: (ruleId: string) => Promise<boolean>;
 }
 
 export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers) {
@@ -144,6 +148,18 @@ export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers
               if (!clip) break;
               if (clip.mode === 'play') {
                 void runBroadcast(clip.clipId, '🎙 관리자 음성 방송', () => handlersRef.current.onVoice(clip.blob));
+              } else if (clip.mode === 'announce' && clip.slot) {
+                const slot = clip.slot;
+                void (async () => {
+                  const ok = await handlersRef.current.onSaveAnnounceClip(slot, clip.blob).catch(() => false);
+                  await client?.send({
+                    type: 'BROADCAST_STATUS',
+                    requestId: clip.clipId,
+                    status: ok ? 'DONE' : 'FAILED',
+                    text: ok ? '안내 녹음 등록 완료' : '안내 녹음 등록 실패 (재생할 수 없는 녹음 형식)',
+                  });
+                  setTimeout(sendTelemetry, 100);
+                })();
               } else {
                 void (async () => {
                   const ok = await handlersRef.current.onSaveAlertSound(clip.blob).catch(() => false);
@@ -158,6 +174,11 @@ export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers
               }
               break;
             }
+            case 'PLAY_ANNOUNCEMENT':
+              void runBroadcast(envelope.id, '🕒 정시 안내 방송', () =>
+                handlersRef.current.onPlayAnnouncement(body.ruleId)
+              );
+              break;
             case 'START_MONITORING':
               void handlersRef.current
                 .onStartMonitoring()

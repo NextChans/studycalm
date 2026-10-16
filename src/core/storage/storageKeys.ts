@@ -10,4 +10,8 @@ export const STORAGE_KEYS = {
   REMOTE_PAIRINGS: 'studycalm_remote_pairings_v2',
   /** 측정 중이었는지 — 재시작/새로고침 후 자동 재개용 */
   MONITORING_DESIRED: 'studycalm_monitoring_desired_v1',
+  /** 정시 안내 규칙별 마지막 방송 날짜 (하루 1회 보장) */
+  ANNOUNCE_FIRED: 'studycalm_announce_fired_v1',
+  /** 리모컨 맞춤 멘트 프리셋 (관리자 폰별) */
+  REMOTE_PRESETS: 'studycalm_remote_presets_v1',
 } as const;

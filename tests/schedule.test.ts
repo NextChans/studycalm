@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { applySchedule, ruleMatches, sanitizeSchedule, ScheduleRule } from '../src/core/schedule/schedule';
+import {
+  applySchedule,
+  dueAnnouncements,
+  nextAnnouncement,
+  ruleMatches,
+  sanitizeSchedule,
+  ScheduleRule,
+} from '../src/core/schedule/schedule';
 import { DEFAULT_CONFIG } from '../src/config/defaults';
 
 const rule = (over: Partial<ScheduleRule>): ScheduleRule => ({
@@ -10,6 +17,9 @@ const rule = (over: Partial<ScheduleRule>): ScheduleRule => ({
   end: '08:00',
   mode: 'mute',
   thresholdDb: -45,
+  text: '',
+  repeat: 1,
+  useVoice: false,
   ...over,
 });
 // 2026-10-16은 금요일
@@ -84,6 +94,56 @@ describe('schedule.sanitizeSchedule', () => {
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ id: 'ok', thresholdDb: -90, enabled: true });
     expect(sanitizeSchedule('nope')).toEqual([]);
-    expect(sanitizeSchedule(new Array(20).fill({ start: '01:00', end: '02:00', days: 'daily', mode: 'mute' }))).toHaveLength(10);
+    expect(sanitizeSchedule(new Array(30).fill({ start: '01:00', end: '02:00', days: 'daily', mode: 'mute' }))).toHaveLength(20);
+  });
+});
+
+describe('schedule 정시 안내(announce)', () => {
+  const ann = (over: Partial<ScheduleRule>): ScheduleRule =>
+    rule({ mode: 'announce', start: '23:50', end: '23:50', text: '마감 10분 전입니다.', ...over });
+
+  it('방송 시각부터 2분 안에만, 하루 1회 대상이 된다', () => {
+    const r = ann({ id: 'close' });
+    expect(dueAnnouncements([r], at(16, '23:49'), {})).toHaveLength(0);
+    expect(dueAnnouncements([r], at(16, '23:50'), {})).toHaveLength(1);
+    expect(dueAnnouncements([r], at(16, '23:51'), {})).toHaveLength(1);
+    expect(dueAnnouncements([r], at(16, '23:52'), {})).toHaveLength(0); // 너무 늦으면 건너뜀
+    expect(dueAnnouncements([r], at(16, '23:50'), { close: '2026-10-16' })).toHaveLength(0); // 오늘 이미 방송
+    expect(dueAnnouncements([r], at(16, '23:50'), { close: '2026-10-15' })).toHaveLength(1); // 어제 방송 → 오늘 다시
+  });
+
+  it('요일 조건과 비활성 규칙을 지킨다', () => {
+    expect(dueAnnouncements([ann({ days: 'weekends' })], at(16, '23:50'), {})).toHaveLength(0); // 금
+    expect(dueAnnouncements([ann({ days: 'weekends' })], at(17, '23:50'), {})).toHaveLength(1); // 토
+    expect(dueAnnouncements([ann({ enabled: false })], at(16, '23:50'), {})).toHaveLength(0);
+  });
+
+  it('안내 규칙은 음소거/임계치 구간 계산에 영향을 주지 않는다', () => {
+    const cfg = { ...DEFAULT_CONFIG, schedule: [ann({ start: '00:00', end: '00:00' })] };
+    const { effective, rule: active } = applySchedule(cfg, at(16, '12:00'));
+    expect(active).toBeNull();
+    expect(effective.autoAlertMuted).toBe(false);
+  });
+
+  it('다음 안내 시각을 계산한다 (오늘 지났으면 다음 해당 요일)', () => {
+    const r = ann({ id: 'a', days: 'weekdays', start: '09:00', end: '09:00' });
+    expect(nextAnnouncement([r], at(16, '08:00'))?.at.getDate()).toBe(16); // 금 09:00
+    expect(nextAnnouncement([r], at(16, '10:00'))?.at.getDate()).toBe(19); // 다음 월요일
+    expect(nextAnnouncement([], at(16, '10:00'))).toBeNull();
+  });
+
+  it('검증: 멘트 공백 정리·길이 제한, 반복 1~3, 멘트·녹음 둘 다 없으면 버림, 중복 id 재발급', () => {
+    const out = sanitizeSchedule([
+      { id: 'x', mode: 'announce', days: 'daily', start: '23:50', text: '  마감   안내  ', repeat: 9 },
+      { id: 'x', mode: 'announce', days: 'daily', start: '12:00', text: 'a'.repeat(300), repeat: 0 },
+      { id: 'y', mode: 'announce', days: 'daily', start: '12:00', text: '   ' },
+      { id: 'z', mode: 'announce', days: 'daily', start: '12:00', text: '', useVoice: true },
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out[0]).toMatchObject({ id: 'x', text: '마감 안내', repeat: 3, end: '23:50' });
+    expect(out[1].id).not.toBe('x');
+    expect(out[1].text).toHaveLength(120);
+    expect(out[1].repeat).toBe(1);
+    expect(out[2]).toMatchObject({ id: 'z', useVoice: true });
   });
 });

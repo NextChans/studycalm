@@ -110,4 +110,76 @@ export class CustomAudioRepo {
       // ignore
     }
   }
+
+  // ------------------------------------------------------------------ 정시 안내용 녹음 (규칙 id별)
+
+  private static clipKey(ruleId: string): string {
+    return `announce_${ruleId}`;
+  }
+
+  /** 정시 안내 규칙에 연결된 녹음 저장 */
+  public static async saveAnnounceClip(ruleId: string, blob: Blob): Promise<void> {
+    const db = await this.openDB();
+    const item: CustomAudioItem = {
+      id: this.clipKey(ruleId),
+      name: `안내 녹음 ${ruleId}`,
+      blob,
+      type: blob.type || 'audio/mp4',
+      size: blob.size,
+      updatedAt: Date.now(),
+    };
+    await new Promise<void>((resolve, reject) => {
+      const req = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(item);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  public static async getAnnounceClip(ruleId: string): Promise<Blob | null> {
+    if (typeof window === 'undefined' || typeof indexedDB === 'undefined') return null;
+    try {
+      const db = await this.openDB();
+      return await new Promise<Blob | null>((resolve, reject) => {
+        const req = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(this.clipKey(ruleId));
+        req.onsuccess = () => resolve((req.result as CustomAudioItem | undefined)?.blob ?? null);
+        req.onerror = () => reject(req.error);
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /** 녹음이 저장된 규칙 id 목록 */
+  public static async listAnnounceClipIds(): Promise<string[]> {
+    if (typeof window === 'undefined' || typeof indexedDB === 'undefined') return [];
+    try {
+      const db = await this.openDB();
+      const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+        const req = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAllKeys();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      return keys
+        .map(String)
+        .filter((k) => k.startsWith('announce_'))
+        .map((k) => k.slice('announce_'.length));
+    } catch {
+      return [];
+    }
+  }
+
+  /** 스케줄에서 사라진 규칙의 녹음 정리 */
+  public static async pruneAnnounceClips(keepRuleIds: string[]): Promise<void> {
+    const keep = new Set(keepRuleIds);
+    const stale = (await this.listAnnounceClipIds()).filter((id) => !keep.has(id));
+    if (stale.length === 0) return;
+    const db = await this.openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      for (const id of stale) store.delete(this.clipKey(id));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
 }
