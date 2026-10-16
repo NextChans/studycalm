@@ -96,21 +96,14 @@ npm run preview
 
 ## 🔊 경고 음성 파일 교체 방법
 
-본 프로젝트의 `public/sounds/`에는 플레이스홀더 파일이 기본 포함되어 있습니다:
-- `public/sounds/alert-1.mp3`
-- `public/sounds/alert-2.mp3`
+모든 태블릿은 같은 경고 멘트를 내도록 **항상 `public/sounds/alert-1.wav` 한 파일만** 재생합니다(로테이션 없음).
+관리자 설정에서 커스텀 음원을 녹음·업로드한 태블릿은 그 음원을 우선 재생합니다(기기별 저장).
 
-실제 매장에서 사용할 음성 파일로 교체하려면:
-1. 안내 멘트(예: *"이용자 여러분, 정숙한 학습 환경을 위해 목소리를 조금만 낮춰주시기 바랍니다."*)를 녹음하거나 AI TTS(CLOVA Voice, Typecast 등)로 mp3 파일 생성.
-2. 생성한 mp3 파일을 `public/sounds/alert-1.mp3`, `alert-2.mp3` 등으로 덮어쓰기.
-3. 파일명을 변경하거나 개수를 늘리고 싶다면 `src/config/defaults.ts`의 `soundFiles` 배열을 수정:
-   ```typescript
-   export const DEFAULT_CONFIG: NoiseConfig = {
-     // ...
-     soundFiles: ['/sounds/study_warning_1.mp3', '/sounds/study_warning_2.mp3'],
-   };
-   ```
-4. 음원 파일이 누락되거나 재생할 수 없는 경우 브라우저 자체 음성 합성(SpeechSynthesis)으로 *"조용히 해주세요."*가 자동 출력됩니다.
+기본 음원을 교체하려면:
+1. 안내 멘트를 녹음하거나 AI TTS로 음원(wav/mp3) 생성
+2. `public/sounds/alert-1.wav`를 덮어쓰거나, 파일명을 바꿨다면 `src/config/defaults.ts`의 `soundFiles` 첫 번째 값을 수정
+3. `public/sw.js`의 `CACHE_NAME` 버전을 올려 기존 태블릿 캐시 갱신
+4. 음원을 재생할 수 없으면 차임 + 서버 TTS("조용히 해주세요.")로 자동 대체됩니다.
 
 ---
 
