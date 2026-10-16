@@ -45,7 +45,6 @@ export class SoundPlayer {
   private soundFiles: string[];
   private volume: number;
   private customAudio: { blob: Blob; url: string } | null = null;
-  private currentIndex = 0;
   private onPlaybackStart?: () => void;
   private onPlaybackEnd?: () => void;
 
@@ -72,7 +71,6 @@ export class SoundPlayer {
   public setSoundFiles(files: string[]): void {
     if (files.length > 0) {
       this.soundFiles = files;
-      this.currentIndex = 0;
     }
   }
 
@@ -111,30 +109,17 @@ export class SoundPlayer {
 
   /** 경고음 파일을 미리 다운로드·디코딩하여 첫 경고 지연 제거 */
   public preload(): void {
-    for (const file of this.soundFiles) {
-      this.getFileBuffer(file).catch(() => {});
-    }
+    this.getFileBuffer(this.primarySoundFile()).catch(() => {});
     if (this.customAudio) this.getCustomBuffer().catch(() => {});
   }
 
   /**
    * 자동/수동 경고 재생 (이미 재생 중이면 무시)
+   * 모든 태블릿이 같은 멘트를 내도록 로테이션 없이 항상 같은 음원(커스텀 우선, 없으면 첫 번째 기본 음원)을 재생한다.
    * @returns 실제로 재생했는지 여부
    */
   public playNextAlert(): Promise<boolean> {
-    return this.run('drop-if-busy', async (gen) => {
-      if (this.customAudio) {
-        try {
-          await this.playCustom(gen);
-          return;
-        } catch (err) {
-          console.warn('[SoundPlayer] Custom audio failed, falling back to default alert:', err);
-        }
-      }
-      const url = this.soundFiles[this.currentIndex % this.soundFiles.length];
-      this.currentIndex = (this.currentIndex + 1) % this.soundFiles.length;
-      await this.playDefaultAlert(url, gen);
-    });
+    return this.run('drop-if-busy', (gen) => this.playConfiguredAlert(gen));
   }
 
   /** 설정 화면 미리듣기: 현재 설정된 경고음(커스텀 우선) 1회 재생 */
@@ -156,10 +141,14 @@ export class SoundPlayer {
         await this.playCustom(gen);
         return;
       } catch (err) {
-        console.warn('[SoundPlayer] Custom audio preview failed:', err);
+        console.warn('[SoundPlayer] Custom audio failed, falling back to default alert:', err);
       }
     }
-    await this.playDefaultAlert(this.soundFiles[0] ?? DEFAULT_ALERT_FILE, gen);
+    await this.playDefaultAlert(this.primarySoundFile(), gen);
+  }
+
+  private primarySoundFile(): string {
+    return this.soundFiles[0] ?? DEFAULT_ALERT_FILE;
   }
 
   /**

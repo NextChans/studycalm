@@ -28,7 +28,7 @@ export interface NoiseConfig {
   emaAlpha: number;
   /** 오디오 레벨 측정 주기 (ms, 약 50ms) */
   sampleIntervalMs: number;
-  /** 경고 음성 mp3 목록 (로테이션 재생) */
+  /** 경고 음원 목록 — 첫 번째 파일만 재생 (모든 태블릿이 같은 멘트를 내도록 로테이션하지 않음) */
   soundFiles: string[];
 }
 
@@ -48,7 +48,7 @@ export const DEFAULT_CONFIG: NoiseConfig = {
   volume: 0.8,
   emaAlpha: 0.15,
   sampleIntervalMs: 50,
-  soundFiles: ['/sounds/alert-1.wav', '/sounds/alert-2.wav'],
+  soundFiles: ['/sounds/alert-1.wav'],
 };
 
 /** 기준/임계치 조정 항목 (원격 리모컨에서 변경 가능한 범위) */
