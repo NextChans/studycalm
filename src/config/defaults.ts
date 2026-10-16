@@ -1,7 +1,13 @@
+import type { ScheduleRule } from '../core/schedule/schedule';
+
 export type BaselineMode = 'auto' | 'manual';
 export type ThresholdMode = 'offset' | 'absolute';
 
 export interface NoiseConfig {
+  /** 숨김 설치용 검은 화면 모드 (화면은 켜진 채 검은 화면만 표시) */
+  stealthMode: boolean;
+  /** 시간대별 운영 스케줄 (음소거 / 임계치 변경) */
+  schedule: ScheduleRule[];
   /** 자동 경고 음소거: 측정·판정은 계속하되 자동 경고 음성은 재생하지 않음 (관리자 수동 방송은 재생) */
   autoAlertMuted: boolean;
   /** 기준(배경소음) 결정 방식: auto=시작 시 자동 측정, manual=관리자 지정값 사용 */
@@ -37,6 +43,8 @@ export interface NoiseConfig {
 export const DB_RANGE = { min: -90, max: 0 } as const;
 
 export const DEFAULT_CONFIG: NoiseConfig = {
+  stealthMode: false,
+  schedule: [],
   autoAlertMuted: false,
   baselineMode: 'auto',
   manualBaselineDb: -60,
@@ -51,7 +59,9 @@ export const DEFAULT_CONFIG: NoiseConfig = {
   volume: 0.8,
   emaAlpha: 0.15,
   sampleIntervalMs: 50,
-  soundFiles: ['/sounds/alert-1.wav'],
+  // ?v= : 구버전 서비스워커가 캐시해 둔 '차임 전용' 옛 음원 대신 반드시 새 파일을 받도록 하는 캐시 버스터.
+  // 음원 파일을 교체하면 이 버전도 올릴 것
+  soundFiles: ['/sounds/alert-1.wav?v=3'],
 };
 
 /** 기준/임계치 조정 항목 (원격 리모컨에서 변경 가능한 범위) */

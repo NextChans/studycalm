@@ -6,13 +6,13 @@ import { DEFAULT_CONFIG } from '../src/config/defaults';
 describe('SettingsRepo', () => {
   beforeEach(() => localStorage.clear());
 
-  it('구버전에 저장된 음원 목록(로테이션)은 무시하고 항상 같은 기본 음원을 사용한다', () => {
+  it('구버전에 저장된 음원 목록(로테이션·캐시버스터 없는 경로)은 무시하고 항상 같은 기본 음원을 사용한다', () => {
     localStorage.setItem(
       STORAGE_KEYS.SETTINGS,
       JSON.stringify({ soundFiles: ['/sounds/alert-2.mp3', '/sounds/alert-1.mp3'], volume: 0.5 })
     );
     const cfg = SettingsRepo.load();
-    expect(cfg.soundFiles).toEqual(['/sounds/alert-1.wav']);
+    expect(cfg.soundFiles).toEqual(['/sounds/alert-1.wav?v=3']);
     expect(cfg.soundFiles).toEqual(DEFAULT_CONFIG.soundFiles);
     expect(cfg.volume).toBe(0.5);
   });
@@ -26,5 +26,22 @@ describe('SettingsRepo 자동 경고 음소거', () => {
     expect(SettingsRepo.load().autoAlertMuted).toBe(false);
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify({ autoAlertMuted: true }));
     expect(SettingsRepo.load().autoAlertMuted).toBe(true);
+  });
+});
+
+describe('SettingsRepo 숨김 모드/스케줄', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('숨김 모드는 true일 때만 켜지고, 스케줄은 검증되어 로드된다', () => {
+    localStorage.setItem(
+      STORAGE_KEYS.SETTINGS,
+      JSON.stringify({
+        stealthMode: 1,
+        schedule: [{ id: 'x', start: '22:00', end: '08:00', days: 'daily', mode: 'mute' }, { bad: true }],
+      })
+    );
+    const cfg = SettingsRepo.load();
+    expect(cfg.stealthMode).toBe(false);
+    expect(cfg.schedule).toHaveLength(1);
   });
 });

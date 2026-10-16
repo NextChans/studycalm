@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { applySchedule } from '../core/schedule/schedule';
 import { AudioEngine, AudioEngineError } from '../core/audio/AudioEngine';
 import { NoiseStateMachine } from '../core/machine/NoiseStateMachine';
 import { StateMachineSnapshot } from '../core/machine/types';
@@ -115,6 +116,22 @@ export function useNoiseMonitor() {
     };
   }, []);
 
+  // 시간대별 스케줄: 30초마다 현재 시각 기준으로 실제 적용 설정(effective)을 다시 계산
+  const [scheduleTick, setScheduleTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setScheduleTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const { effective: effectiveConfig, rule: activeScheduleRule } = useMemo(
+    () => applySchedule(config, new Date(scheduleTick)),
+    [config, scheduleTick]
+  );
+  useEffect(() => {
+    machineRef.current?.updateConfig(effectiveConfig);
+    autoAlertMutedRef.current = effectiveConfig.autoAlertMuted;
+    playerRef.current?.setVolume(effectiveConfig.volume);
+  }, [effectiveConfig]);
+
   // Save new custom audio
   const saveCustomAudio = useCallback(async (blob: Blob, name: string) => {
     const item = await CustomAudioRepo.saveAudio(blob, name);
@@ -148,13 +165,9 @@ export function useNoiseMonitor() {
     setConfig((prev) => {
       const merged = { ...prev, ...newConfig };
       SettingsRepo.save(merged);
-      autoAlertMutedRef.current = merged.autoAlertMuted;
-      machineRef.current?.updateConfig(merged);
+      // 상태 머신·음소거·볼륨은 스케줄을 반영한 effective 설정으로 아래 effect에서 적용
       if (newConfig.emaAlpha !== undefined) {
         engineRef.current?.setEmaAlpha(newConfig.emaAlpha);
-      }
-      if (newConfig.volume !== undefined) {
-        playerRef.current?.setVolume(newConfig.volume);
       }
       if (newConfig.soundFiles !== undefined) {
         playerRef.current?.setSoundFiles(newConfig.soundFiles);
@@ -235,6 +248,8 @@ export function useNoiseMonitor() {
 
   return {
     config,
+    effectiveConfig,
+    activeScheduleRule,
     updateConfig,
     snapshot,
     dailyAlertCount,

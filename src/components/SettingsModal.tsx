@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { DEFAULT_CONFIG, NoiseConfig } from '../config/defaults';
 import { CustomAudioItem } from '../core/storage/customAudioRepo';
 import { TuningControls } from './TuningControls';
+import { ScheduleEditor } from './ScheduleEditor';
+import { sanitizeSchedule } from '../core/schedule/schedule';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -69,7 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSave = () => {
-    onSave(formData);
+    onSave({ ...formData, schedule: sanitizeSchedule(formData.schedule) });
     setSaveToast(true);
     setTimeout(() => {
       setSaveToast(false);
@@ -299,6 +301,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="w-5 h-5 accent-indigo-500 shrink-0"
             />
           </label>
+
+          {/* 0-1. 숨김(검은 화면) 모드 */}
+          <label className="flex items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800 cursor-pointer">
+            <div className="flex flex-col">
+              <span className="font-semibold text-slate-200 text-sm">🌑 숨김 모드 (검은 화면)</span>
+              <span className="text-[11px] text-slate-400">
+                태블릿을 숨겨 설치할 때 사용. 화면은 켜둔 채 검은 화면만 표시하며, 터치하면 30초간 보입니다.
+              </span>
+            </div>
+            <input
+              type="checkbox"
+              checked={formData.stealthMode}
+              onChange={(e) => handleChange('stealthMode', e.target.checked)}
+              className="w-5 h-5 accent-indigo-500 shrink-0"
+            />
+          </label>
+
+          {/* 0-2. 시간대별 스케줄 */}
+          <div className="flex flex-col gap-2 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+            <span className="font-semibold text-slate-200 text-sm">🕒 시간대별 운영 스케줄</span>
+            <ScheduleEditor
+              rules={formData.schedule}
+              onChange={(rules) => handleChange('schedule', rules)}
+            />
+          </div>
 
           {/* 1. 기준 / 임계치 (자동·수동) */}
           <TuningControls

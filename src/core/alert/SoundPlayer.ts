@@ -9,7 +9,7 @@ export interface SoundPlayerOptions {
 }
 
 const TTS_CACHE_LIMIT = 20;
-const DEFAULT_ALERT_FILE = '/sounds/alert-1.wav';
+const DEFAULT_ALERT_FILE = '/sounds/alert-1.wav?v=3';
 
 function decodeAudio(ctx: AudioContext, data: ArrayBuffer): Promise<AudioBuffer> {
   // 구형 Safari는 Promise 형 decodeAudioData를 지원하지 않으므로 콜백 형태 사용

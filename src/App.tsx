@@ -15,6 +15,29 @@ import { FooterNotice } from './components/FooterNotice';
 import { registerServiceWorker, activateWaitingWorker } from './core/pwa/registerServiceWorker';
 import { useTabletRemote } from './hooks/useTabletRemote';
 import { SoundPlayer } from './core/alert/SoundPlayer';
+import { useBattery } from './hooks/useBattery';
+import { StealthOverlay } from './components/StealthOverlay';
+import { describeRule } from './core/schedule/schedule';
+import { STORAGE_KEYS } from './core/storage/storageKeys';
+
+/** 측정 중 여부를 저장해 재시작·새로고침 후 자동 재개 (숨김 설치 대응) */
+const setMonitoringDesired = (on: boolean) => {
+  try {
+    if (on) localStorage.setItem(STORAGE_KEYS.MONITORING_DESIRED, '1');
+    else localStorage.removeItem(STORAGE_KEYS.MONITORING_DESIRED);
+  } catch {
+    // ignore
+  }
+};
+const isMonitoringDesired = () => {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.MONITORING_DESIRED) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const STEALTH_REVEAL_MS = 30_000;
 
 export const App: React.FC = () => {
   // 모바일 원격 리모컨 라우트 감지 (/remote, #k=페어링키, 구버전 ?room= 링크)
@@ -52,7 +75,10 @@ export const App: React.FC = () => {
     isPlaybackActive,
     dismissError,
     unlockAudio,
+    effectiveConfig,
+    activeScheduleRule,
   } = useNoiseMonitor();
+  const battery = useBattery();
 
   const { isLocked, requestLock, releaseLock } = useWakeLock();
   const { isBackground } = useVisibility();
@@ -71,10 +97,40 @@ export const App: React.FC = () => {
   const customAudioNameRef = useRef<string | null>(customAudio?.name ?? null);
   customAudioNameRef.current = customAudio?.name ?? null;
 
-  const latestTelemetryRef = useRef({ snapshot, dailyAlertCount, isAudioRunning, config });
+  const latestTelemetryRef = useRef({
+    snapshot,
+    dailyAlertCount,
+    isAudioRunning,
+    config,
+    effectiveConfig,
+    activeScheduleRule,
+    battery,
+  });
   useEffect(() => {
-    latestTelemetryRef.current = { snapshot, dailyAlertCount, isAudioRunning, config };
-  }, [snapshot, dailyAlertCount, isAudioRunning, config]);
+    latestTelemetryRef.current = {
+      snapshot,
+      dailyAlertCount,
+      isAudioRunning,
+      config,
+      effectiveConfig,
+      activeScheduleRule,
+      battery,
+    };
+  }, [snapshot, dailyAlertCount, isAudioRunning, config, effectiveConfig, activeScheduleRule, battery]);
+
+  // 숨김 모드: 터치하면 30초간 화면 표시 후 다시 검은 화면
+  const [stealthRevealed, setStealthRevealed] = useState(false);
+  useEffect(() => {
+    if (!stealthRevealed) return;
+    const t = setTimeout(() => setStealthRevealed(false), STEALTH_REVEAL_MS);
+    return () => clearTimeout(t);
+  }, [stealthRevealed]);
+  const showStealth = !isRemoteRoute && config.stealthMode && !stealthRevealed && pinTarget === null;
+
+  // 브라우저가 저장공간 정리 시 페어링 키·설정을 지우지 않도록 영구 저장소 요청 (지원 브라우저만)
+  useEffect(() => {
+    void navigator.storage?.persist?.().catch(() => false);
+  }, []);
 
   // PWA 서비스워커 등록
   useEffect(() => {
@@ -99,11 +155,30 @@ export const App: React.FC = () => {
     };
   }, [isRemoteRoute, unlockAudio]);
 
+  // 재시작·새로고침 후 자동 재개: 이전에 측정 중이었다면 터치 없이 다시 측정 시작
+  // (마이크 권한이 이미 허용된 경우. 소리 출력은 Android 홈 화면 앱은 바로 가능, iPad는 화면 터치 필요)
+  const autoResumeTriedRef = useRef(false);
+  useEffect(() => {
+    if (isRemoteRoute || autoResumeTriedRef.current || !isMonitoringDesired()) return;
+    autoResumeTriedRef.current = true;
+    void (async () => {
+      await start();
+      await requestLock();
+    })();
+  }, [isRemoteRoute, start, requestLock]);
+
   // 태블릿 원격 수신 (다중 중계 + E2E 암호화)
   const remote = useTabletRemote(!isRemoteRoute, {
     getTelemetry: () => {
-      const { snapshot: snap, dailyAlertCount: count, isAudioRunning: running, config: cfg } =
-        latestTelemetryRef.current;
+      const {
+        snapshot: snap,
+        dailyAlertCount: count,
+        isAudioRunning: running,
+        config: cfg,
+        effectiveConfig: eff,
+        activeScheduleRule: rule,
+        battery: bat,
+      } = latestTelemetryRef.current;
       return {
         currentDb: snap.currentDb,
         smoothedDb: snap.smoothedDb,
@@ -116,6 +191,11 @@ export const App: React.FC = () => {
         isPlaying: isPlaybackActive(),
         customAlertName: customAudioNameRef.current,
         autoAlertMuted: cfg.autoAlertMuted,
+        effectiveMuted: eff.autoAlertMuted,
+        activeSchedule: rule ? describeRule(rule) : null,
+        schedule: cfg.schedule,
+        stealthMode: cfg.stealthMode,
+        battery: bat,
         tuning: {
           baselineMode: cfg.baselineMode,
           manualBaselineDb: cfg.manualBaselineDb,
@@ -140,6 +220,11 @@ export const App: React.FC = () => {
     },
     onResetAlertSound: deleteCustomAudio,
     onSetMute: (muted) => updateConfig({ autoAlertMuted: muted }),
+    onSetStealth: (enabled) => {
+      updateConfig({ stealthMode: enabled });
+      setStealthRevealed(false);
+    },
+    onSetSchedule: (rules) => updateConfig({ schedule: rules }),
   });
 
   const handleApplyUpdate = useCallback(() => {
@@ -153,6 +238,7 @@ export const App: React.FC = () => {
     if (isAudioRunning) {
       setPinTarget('stop');
     } else {
+      setMonitoringDesired(true);
       await start();
       await requestLock();
     }
@@ -162,6 +248,7 @@ export const App: React.FC = () => {
     if (pinTarget === 'settings') setIsSettingsModalOpen(true);
     if (pinTarget === 'remote') setIsRemoteModalOpen(true);
     if (pinTarget === 'stop') {
+      setMonitoringDesired(false);
       stop();
       void releaseLock();
     }
@@ -271,9 +358,14 @@ export const App: React.FC = () => {
       {/* 메인 모니터링 영역 (태블릿 가로 중앙 정렬) */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-6 py-6 flex flex-col justify-center items-center gap-6">
         {/* 상태 배지 */}
-        {config.autoAlertMuted && (
+        {effectiveConfig.autoAlertMuted && (
           <div className="px-4 py-2 rounded-xl bg-slate-800 border border-slate-600 text-slate-200 text-sm font-bold">
             🔇 자동 경고 음소거 중 · 측정만 진행합니다
+          </div>
+        )}
+        {activeScheduleRule && (
+          <div className="px-3 py-1.5 rounded-lg bg-sky-950/60 border border-sky-800 text-sky-200 text-xs font-semibold">
+            🕒 스케줄 적용 중: {describeRule(activeScheduleRule)}
           </div>
         )}
 
@@ -368,6 +460,8 @@ export const App: React.FC = () => {
         initError={remote.initError}
         onRotateKey={remote.rotateKey}
       />
+
+      {showStealth && <StealthOverlay onReveal={() => setStealthRevealed(true)} />}
 
       {/* 하단 안심 문구 (고정) */}
       <FooterNotice />

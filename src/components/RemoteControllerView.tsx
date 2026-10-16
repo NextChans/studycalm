@@ -6,6 +6,8 @@ import { NoiseTuning } from '../config/defaults';
 import { TabletLinkState, useRemoteFleet } from '../hooks/useRemoteFleet';
 import { TuningControls } from './TuningControls';
 import { VoiceRecorder } from './VoiceRecorder';
+import { ScheduleEditor } from './ScheduleEditor';
+import { ScheduleRule, sanitizeSchedule } from '../core/schedule/schedule';
 import { VOICE_CHUNK_INTERVAL_MS, VoiceMode, newClipId, splitVoiceClip } from '../core/remote/voiceClip';
 
 /** 이 시간 동안 태블릿 텔레메트리가 없으면 오프라인으로 판단 */
@@ -48,6 +50,43 @@ function consumePairingFromUrl(): { pairings: RemotePairing[]; isLegacyLink: boo
   return { pairings, isLegacyLink: isLegacyLink && !parsed, addedKey: parsed?.key ?? null };
 }
 
+/** 리모컨을 연 뒤 이 시간이 지나도록 한 번도 응답이 없으면 '응답 없음'으로 경고 */
+const FIRST_CONTACT_GRACE_MS = 20_000;
+const LOW_BATTERY_PERCENT = 20;
+
+interface TabletIssue {
+  id: string;
+  text: string;
+  severity: 'critical' | 'warning';
+}
+
+/**
+ * 숨겨 설치한 태블릿은 화면을 볼 수 없으므로 원격에서 이상 상태를 판정해 알린다
+ */
+function tabletIssues(link: TabletLinkState | undefined, now: number, openedAt: number): TabletIssue[] {
+  if (!link) return [];
+  const relay = link.statuses.some((s) => s.connected);
+  if (!relay) return [];
+  const t = link.telemetry;
+  const silentFor = now - link.lastTelemetryAt;
+  if (link.lastTelemetryAt === 0 ? now - openedAt > FIRST_CONTACT_GRACE_MS : silentFor >= TABLET_OFFLINE_AFTER_MS) {
+    return [{ id: 'offline', text: '응답 없음 (꺼짐·Wi-Fi 끊김·앱 종료 확인)', severity: 'critical' }];
+  }
+  if (!t) return [];
+  const issues: TabletIssue[] = [];
+  if (!t.isAudioRunning) issues.push({ id: 'stopped', text: '소음 측정이 멈춰 있음', severity: 'critical' });
+  if (!t.isAudioUnlocked)
+    issues.push({ id: 'audio', text: '소리 출력 미허용 (태블릿 화면 한 번 터치 필요)', severity: 'warning' });
+  if (t.battery && !t.battery.charging) {
+    issues.push(
+      t.battery.level <= LOW_BATTERY_PERCENT
+        ? { id: 'battery-low', text: `배터리 부족 ${t.battery.level}% · 충전기 연결 필요`, severity: 'critical' }
+        : { id: 'unplugged', text: `충전기 분리됨 (배터리 ${t.battery.level}%)`, severity: 'warning' }
+    );
+  }
+  return issues;
+}
+
 const isOnline = (link: TabletLinkState | undefined, now: number) =>
   !!link && link.statuses.some((s) => s.connected) && now - link.lastTelemetryAt < TABLET_OFFLINE_AFTER_MS;
 
@@ -67,6 +106,8 @@ export const RemoteControllerView: React.FC = () => {
   const [pending, setPending] = useState<Record<string, string>>({});
 
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openedAtRef = useRef(Date.now());
+  const knownIssuesRef = useRef(new Set<string>());
   const pendingTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   const showToast = useCallback((msg: string) => {
@@ -146,6 +187,8 @@ export const RemoteControllerView: React.FC = () => {
   const targetBusy = targetKeys.some((k) => pending[k] || links[k]?.telemetry?.isPlaying);
   const canBroadcast = selectedOnline && !targetKeys.some((k) => pending[k]);
   /** 대상이 모두 음소거 상태이면 버튼은 '해제', 하나라도 켜져 있으면 '음소거' */
+  const targetsStealth =
+    targetKeys.length > 0 && targetKeys.every((k) => links[k]?.telemetry?.stealthMode === true);
   const targetsMuted =
     targetKeys.length > 0 && targetKeys.every((k) => links[k]?.telemetry?.autoAlertMuted === true);
 
@@ -252,6 +295,26 @@ export const RemoteControllerView: React.FC = () => {
     if (next.length === 0) setIsAdding(true);
   };
 
+  const allIssues = pairings.flatMap((p) =>
+    tabletIssues(links[p.key], now, openedAtRef.current).map((issue) => ({
+      ...issue,
+      key: `${p.key}:${issue.id}`,
+      name: nameOf(p.key, links[p.key]?.telemetry?.tabletName),
+    }))
+  );
+  const issueSignature = allIssues.map((i) => i.key).join('|');
+
+  // 새로운 이상이 생기면 진동 + 토스트로 즉시 알림 (이미 알린 이상은 반복 알림하지 않음)
+  useEffect(() => {
+    const current = new Set(issueSignature ? issueSignature.split('|') : []);
+    const fresh = [...current].filter((k) => !knownIssuesRef.current.has(k));
+    knownIssuesRef.current = current;
+    if (fresh.length > 0) {
+      navigator.vibrate?.([200, 100, 200]);
+      showToast('🚨 태블릿 확인이 필요합니다. 상단 알림을 확인하세요.');
+    }
+  }, [issueSignature, showToast]);
+
   // ------------------------------------------------------------------ 태블릿 추가 화면
   if (isAdding) {
     return (
@@ -322,6 +385,21 @@ export const RemoteControllerView: React.FC = () => {
         </button>
       </header>
 
+      {/* 태블릿 이상 알림 */}
+      {allIssues.length > 0 && (
+        <section className="flex flex-col gap-1.5 p-3 rounded-2xl bg-rose-950/60 border border-rose-700">
+          <span className="text-xs font-black text-rose-200">🚨 태블릿 확인 필요 ({allIssues.length})</span>
+          {allIssues.map((issue) => (
+            <span
+              key={issue.key}
+              className={`text-[11px] ${issue.severity === 'critical' ? 'text-rose-100 font-semibold' : 'text-amber-200'}`}
+            >
+              • [{issue.name}] {issue.text}
+            </span>
+          ))}
+        </section>
+      )}
+
       {/* 태블릿 목록 */}
       <section className="flex flex-col gap-2">
         {pairings.length > 1 && (
@@ -351,8 +429,11 @@ export const RemoteControllerView: React.FC = () => {
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-2 h-2 rounded-full shrink-0 ${online ? 'bg-emerald-400' : 'bg-rose-500'}`} />
                   <span className="text-sm font-bold truncate">{nameOf(p.key, t?.tabletName)}</span>
-                  {online && t?.autoAlertMuted && (
+                  {online && t?.effectiveMuted && (
                     <span className="text-[10px] px-1.5 rounded bg-slate-700 text-slate-200 shrink-0">🔇 음소거</span>
+                  )}
+                  {online && t?.stealthMode && (
+                    <span className="text-[10px] px-1.5 rounded bg-slate-800 text-slate-300 shrink-0">🌑 숨김</span>
                   )}
                   {online && t?.isPlaying && (
                     <span className="text-[10px] px-1.5 rounded bg-rose-900 text-rose-200 shrink-0">방송 중</span>
@@ -374,6 +455,12 @@ export const RemoteControllerView: React.FC = () => {
                   <span className="text-[11px] text-slate-500 ml-1">dB</span>
                 </span>
                 <div className="flex items-center gap-3 text-[11px]">
+                  {online && t?.battery && (
+                    <span className={t.battery.charging ? 'text-emerald-300' : 'text-amber-300'}>
+                      {t.battery.charging ? '⚡' : '🔋'}
+                      {t.battery.level}%
+                    </span>
+                  )}
                   <span className="text-rose-300">오늘 경고 {t?.dailyAlertCount ?? 0}회</span>
                   <button
                     onClick={(e) => {
@@ -386,10 +473,8 @@ export const RemoteControllerView: React.FC = () => {
                   </button>
                 </div>
               </div>
-              {online && t && !t.isAudioUnlocked && (
-                <p className="mt-1.5 text-[10px] text-amber-300">
-                  ⚠️ 태블릿 소리 출력 미허용 — 태블릿 화면을 한 번 터치해야 방송이 나옵니다.
-                </p>
+              {online && t?.activeSchedule && (
+                <p className="mt-1.5 text-[10px] text-sky-300">🕒 스케줄 적용 중: {t.activeSchedule}</p>
               )}
               {link?.error && <p className="mt-1.5 text-[10px] text-rose-300">{link.error}</p>}
               {link?.fingerprint && selected === p.key && (
@@ -445,6 +530,19 @@ export const RemoteControllerView: React.FC = () => {
           }`}
         >
           {targetsMuted ? '🔔 자동 경고 음소거 해제' : '🔇 자동 경고 음소거 (측정만)'}
+        </button>
+
+        <button
+          onClick={() =>
+            void sendToTargets(
+              { type: 'SET_STEALTH', enabled: !targetsStealth },
+              targetsStealth ? '☀️ 숨김 모드를 해제했습니다.' : '🌑 숨김 모드(검은 화면)를 켰습니다.'
+            )
+          }
+          disabled={!selectedOnline}
+          className="py-2.5 rounded-2xl border border-slate-700 bg-slate-900 hover:bg-slate-800 text-xs font-bold text-slate-300 transition disabled:opacity-40"
+        >
+          {targetsStealth ? '☀️ 숨김 모드 해제 (화면 표시)' : '🌑 숨김 모드 켜기 (검은 화면)'}
         </button>
 
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
@@ -509,6 +607,14 @@ export const RemoteControllerView: React.FC = () => {
         )}
 
         {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
+          <RemoteSchedulePanel
+            key={`schedule-${selected}`}
+            rules={selectedLink.telemetry.schedule}
+            onSave={(rules) => sendToTargets({ type: 'SET_SCHEDULE', rules }, '🕒 스케줄을 저장했습니다.')}
+          />
+        )}
+
+        {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
           <RemoteTuningPanel
             key={selected}
             link={selectedLink}
@@ -521,6 +627,65 @@ export const RemoteControllerView: React.FC = () => {
       <footer className="mt-auto pt-3 border-t border-slate-900 text-center text-[10px] text-slate-500">
         StudyCalm 원격 제어 · 종단간 암호화
       </footer>
+    </div>
+  );
+};
+
+/**
+ * 선택한 태블릿의 시간대별 스케줄 원격 편집 (저장 버튼을 눌러야 전송)
+ */
+const RemoteSchedulePanel: React.FC<{
+  rules: ScheduleRule[];
+  onSave: (rules: ScheduleRule[]) => Promise<void>;
+}> = ({ rules, onSave }) => {
+  const [draft, setDraft] = useState<ScheduleRule[]>(rules);
+  const [dirty, setDirty] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  // 편집 중이 아닐 때만 태블릿의 실제 값으로 동기화
+  useEffect(() => {
+    if (!dirty) setDraft(rules);
+  }, [rules, dirty]);
+
+  return (
+    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
+      <button onClick={() => setOpen((v) => !v)} className="flex justify-between items-center text-left">
+        <span className="text-xs font-bold text-slate-200">🕒 시간대별 운영 스케줄 ({rules.length})</span>
+        <span className="text-[11px] text-slate-400">{open ? '접기' : '펼치기'}</span>
+      </button>
+      {open && (
+        <>
+          <ScheduleEditor
+            rules={draft}
+            onChange={(next) => {
+              setDraft(next);
+              setDirty(true);
+            }}
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                void onSave(sanitizeSchedule(draft)).then(() => setDirty(false));
+              }}
+              disabled={!dirty}
+              className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white"
+            >
+              스케줄 저장
+            </button>
+            {dirty && (
+              <button
+                onClick={() => {
+                  setDraft(rules);
+                  setDirty(false);
+                }}
+                className="px-3 py-2 rounded-xl bg-slate-800 text-xs text-slate-300"
+              >
+                취소
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 };

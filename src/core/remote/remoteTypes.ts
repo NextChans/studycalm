@@ -1,4 +1,5 @@
 import type { NoiseTuning } from '../../config/defaults';
+import type { ScheduleRule } from '../schedule/schedule';
 import { MAX_VOICE_CHUNKS, VOICE_CHUNK_BYTES, type VoiceChunk } from './voiceClip';
 
 export type RemoteRole = 'tablet' | 'remote';
@@ -23,8 +24,18 @@ export interface TelemetryData {
   remoteCount: number;
   /** 현재 기준/임계치 설정 */
   tuning: NoiseTuning;
-  /** 자동 경고 음소거 여부 */
+  /** 자동 경고 음소거 여부 (관리자가 켠 수동 음소거) */
   autoAlertMuted: boolean;
+  /** 스케줄까지 반영한 실제 음소거 여부 */
+  effectiveMuted: boolean;
+  /** 현재 적용 중인 스케줄 설명 (없으면 null) */
+  activeSchedule: string | null;
+  /** 시간대별 스케줄 규칙 */
+  schedule: ScheduleRule[];
+  /** 숨김(검은 화면) 모드 */
+  stealthMode: boolean;
+  /** 배터리 (지원하지 않는 기기는 null) */
+  battery: { level: number; charging: boolean } | null;
   /** 커스텀 경고음 등록 여부와 이름 */
   customAlertName: string | null;
 }
@@ -40,6 +51,10 @@ export type RemoteCommand =
   | { type: 'ADJUST'; tuning: Partial<NoiseTuning> }
   /** 리모컨에서 녹음한 음성 조각 (mode=play: 즉시 방송, save: 경고음으로 등록) */
   | VoiceChunk
+  /** 숨김(검은 화면) 모드 켜기/끄기 */
+  | { type: 'SET_STEALTH'; enabled: boolean }
+  /** 시간대별 스케줄 전체 교체 */
+  | { type: 'SET_SCHEDULE'; rules: ScheduleRule[] }
   /** 자동 경고 음소거 켜기/끄기 (태블릿에 저장됨) */
   | { type: 'SET_MUTE'; muted: boolean }
   /** 커스텀 경고음 삭제 → 기본 경고음으로 복원 */
@@ -74,6 +89,8 @@ const COMMAND_TYPES = new Set([
   'VOICE_CHUNK',
   'RESET_ALERT_SOUND',
   'SET_MUTE',
+  'SET_STEALTH',
+  'SET_SCHEDULE',
   'PING',
 ]);
 /** 조각 base64 길이 상한 (9KB → base64 12KB) */
@@ -116,6 +133,8 @@ export function parseEnvelope(plain: string): RemoteEnvelope | null {
 
   if (body.type === 'ADJUST' && (!body.tuning || typeof body.tuning !== 'object')) return null;
   if (body.type === 'SET_MUTE' && typeof body.muted !== 'boolean') return null;
+  if (body.type === 'SET_STEALTH' && typeof body.enabled !== 'boolean') return null;
+  if (body.type === 'SET_SCHEDULE' && !Array.isArray(body.rules)) return null;
 
   if (body.type === 'VOICE_CHUNK') {
     const { clipId, seq, total, mime, mode, data } = body;

@@ -44,10 +44,11 @@ export function registerServiceWorker(callbacks: ServiceWorkerCallbacks = {}): v
         console.warn('[PWA] ServiceWorker registration failed:', error);
       });
 
-    // 새 서비스워커 활성화 후 페이지 리로드
+    // 새 서비스워커 활성화 후 페이지 리로드 (최초 설치 시에는 리로드하지 않음)
+    const hadController = !!navigator.serviceWorker.controller;
     let refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!refreshing) {
+      if (hadController && !refreshing) {
         refreshing = true;
         window.location.reload();
       }

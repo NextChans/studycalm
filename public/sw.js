@@ -1,17 +1,11 @@
-const CACHE_NAME = 'studycalm-v3';
+const CACHE_NAME = 'studycalm-v4';
 
-const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.webmanifest',
-  '/favicon.ico',
-  '/sounds/alert-1.wav',
-  '/sounds/alert-2.wav',
-  '/sounds/alert-1.mp3',
-  '/sounds/alert-2.mp3',
-];
+const PRECACHE_ASSETS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.ico', '/sounds/alert-1.wav?v=3'];
 
 self.addEventListener('install', (event) => {
+  // 숨겨 설치한 태블릿은 업데이트 배너를 누를 사람이 없으므로 새 버전을 즉시 활성화한다
+  // (페이지는 controllerchange 시 새로고침되고, 측정 중이었다면 자동 재개됨)
+  self.skipWaiting();
   event.waitUntil(
     caches
       .open(CACHE_NAME)
