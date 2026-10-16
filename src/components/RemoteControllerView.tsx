@@ -40,7 +40,8 @@ function consumePairingFromUrl(): { pairings: RemotePairing[]; isLegacyLink: boo
     pairings = PairingRepo.upsertRemotePairing(parsed.key, parsed.name);
   }
   if (parsed || isLegacyLink || window.location.hash) {
-    window.history.replaceState(null, '', '/remote');
+    // 정적 호스팅 라우팅에 의존하지 않도록 루트 경로 + 쿼리로 유지 (새로고침 시에도 리모컨 화면)
+    window.history.replaceState(null, '', '/?mode=remote');
   }
   return { pairings, isLegacyLink: isLegacyLink && !parsed, addedKey: parsed?.key ?? null };
 }

@@ -4,11 +4,11 @@
   "rewrites": [
     {
       "source": "/remote",
-      "destination": "/index.html"
+      "destination": "/"
     },
     {
       "source": "/remote/:path*",
-      "destination": "/index.html"
+      "destination": "/"
     }
   ],
   "headers": [

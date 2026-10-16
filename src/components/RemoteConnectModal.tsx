@@ -41,7 +41,7 @@ export const RemoteConnectModal: React.FC<RemoteConnectModalProps> = ({
   const isConnected = statuses.some((s) => s.connected);
   const hasSupabase = statuses.some((s) => s.id === 'supabase');
   // 페어링 키는 URL fragment(#)로만 전달 → 서버 요청/로그에 포함되지 않음
-  const remoteUrl = `${window.location.origin}/remote#k=${pairingKey}&n=${encodeURIComponent(tabletName)}`;
+  const remoteUrl = `${window.location.origin}/?mode=remote#k=${pairingKey}&n=${encodeURIComponent(tabletName)}`;
 
   const handleCopy = async () => {
     try {
