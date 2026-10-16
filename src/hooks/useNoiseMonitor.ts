@@ -162,6 +162,7 @@ export function useNoiseMonitor() {
   const start = useCallback(async () => {
     setAudioError(null);
     try {
+      playerRef.current?.unlock();
       if (engineRef.current && !engineRef.current.isActive()) {
         await engineRef.current.start();
         setIsAudioRunning(true);

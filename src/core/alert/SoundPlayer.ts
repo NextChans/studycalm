@@ -49,6 +49,28 @@ export class SoundPlayer {
   }
 
   /**
+   * 사용자 터치 시 호출하여 iOS Safari 오디오 서브시스템을 잠금 해제(Prime)
+   */
+  public unlock(): void {
+    try {
+      VoiceFallback.unlock();
+      const dummy = new Audio('/sounds/alert-1.mp3');
+      dummy.volume = 0;
+      dummy
+        .play()
+        .then(() => {
+          dummy.pause();
+          dummy.currentTime = 0;
+        })
+        .catch(() => {
+          // ignore
+        });
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
    * 커스텀 등록 음원 우선 재생 -> 로테이션 파일 재생 -> SpeechSynthesis 폴백
    */
   public async playNextAlert(): Promise<void> {
@@ -96,7 +118,14 @@ export class SoundPlayer {
       this.currentAudio = audio;
       audio.volume = this.volume;
 
+      // iOS WebKit에서 이벤트 미발생으로 인한 영구 블로킹 방지 안전 타이머 (최대 7초)
+      const safetyTimer = setTimeout(() => {
+        cleanup();
+        reject(new Error('Audio playback timed out.'));
+      }, 7000);
+
       const cleanup = () => {
+        clearTimeout(safetyTimer);
         audio.removeEventListener('ended', handleEnded);
         audio.removeEventListener('error', handleError);
       };
