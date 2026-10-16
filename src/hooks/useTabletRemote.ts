@@ -27,6 +27,8 @@ export interface TabletRemoteHandlers {
   onResetAlertSound: () => Promise<void>;
   onSetMute: (muted: boolean) => void;
   onSetStealth: (enabled: boolean) => void;
+  onStartMonitoring: () => Promise<void>;
+  onStopMonitoring: () => void;
   onSetSchedule: (rules: ScheduleRule[]) => void;
 }
 
@@ -156,6 +158,16 @@ export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers
               }
               break;
             }
+            case 'START_MONITORING':
+              void handlersRef.current
+                .onStartMonitoring()
+                .catch(() => {})
+                .finally(() => setTimeout(sendTelemetry, 300));
+              break;
+            case 'STOP_MONITORING':
+              handlersRef.current.onStopMonitoring();
+              setTimeout(sendTelemetry, 300);
+              break;
             case 'SET_STEALTH':
               handlersRef.current.onSetStealth(body.enabled);
               setTimeout(sendTelemetry, 100);

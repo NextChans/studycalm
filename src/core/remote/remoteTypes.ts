@@ -34,6 +34,8 @@ export interface TelemetryData {
   schedule: ScheduleRule[];
   /** 숨김(검은 화면) 모드 */
   stealthMode: boolean;
+  /** 마이크/측정 오류 메시지 (권한 거부 등, 없으면 null) */
+  audioError: string | null;
   /** 배터리 (지원하지 않는 기기는 null) */
   battery: { level: number; charging: boolean } | null;
   /** 커스텀 경고음 등록 여부와 이름 */
@@ -51,6 +53,9 @@ export type RemoteCommand =
   | { type: 'ADJUST'; tuning: Partial<NoiseTuning> }
   /** 리모컨에서 녹음한 음성 조각 (mode=play: 즉시 방송, save: 경고음으로 등록) */
   | VoiceChunk
+  /** 소음 측정 원격 시작/정지 (리모컨은 페어링 키를 가진 관리자이므로 PIN 없이 허용) */
+  | { type: 'START_MONITORING' }
+  | { type: 'STOP_MONITORING' }
   /** 숨김(검은 화면) 모드 켜기/끄기 */
   | { type: 'SET_STEALTH'; enabled: boolean }
   /** 시간대별 스케줄 전체 교체 */
@@ -90,6 +95,8 @@ const COMMAND_TYPES = new Set([
   'RESET_ALERT_SOUND',
   'SET_MUTE',
   'SET_STEALTH',
+  'START_MONITORING',
+  'STOP_MONITORING',
   'SET_SCHEDULE',
   'PING',
 ]);

@@ -74,7 +74,9 @@ function tabletIssues(link: TabletLinkState | undefined, now: number, openedAt: 
   }
   if (!t) return [];
   const issues: TabletIssue[] = [];
-  if (!t.isAudioRunning) issues.push({ id: 'stopped', text: '소음 측정이 멈춰 있음', severity: 'critical' });
+  if (t.audioError) issues.push({ id: 'audio-error', text: `측정 오류: ${t.audioError}`, severity: 'critical' });
+  else if (!t.isAudioRunning)
+    issues.push({ id: 'stopped', text: '소음 측정이 멈춰 있음 (리모컨에서 시작 가능)', severity: 'critical' });
   if (!t.isAudioUnlocked)
     issues.push({ id: 'audio', text: '소리 출력 미허용 (태블릿 화면 한 번 터치 필요)', severity: 'warning' });
   if (t.battery && !t.battery.charging) {
@@ -98,6 +100,7 @@ export const RemoteControllerView: React.FC = () => {
   const [pasteInput, setPasteInput] = useState('');
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [confirmStop, setConfirmStop] = useState(false);
 
   const [now, setNow] = useState(() => Date.now());
   const [customText, setCustomText] = useState('');
@@ -187,6 +190,8 @@ export const RemoteControllerView: React.FC = () => {
   const targetBusy = targetKeys.some((k) => pending[k] || links[k]?.telemetry?.isPlaying);
   const canBroadcast = selectedOnline && !targetKeys.some((k) => pending[k]);
   /** 대상이 모두 음소거 상태이면 버튼은 '해제', 하나라도 켜져 있으면 '음소거' */
+  /** 대상 중 하나라도 측정 중이면 '정지' 버튼, 모두 정지 상태면 '시작' 버튼 */
+  const targetsRunning = targetKeys.some((k) => links[k]?.telemetry?.isAudioRunning === true);
   const targetsStealth =
     targetKeys.length > 0 && targetKeys.every((k) => links[k]?.telemetry?.stealthMode === true);
   const targetsMuted =
@@ -530,6 +535,34 @@ export const RemoteControllerView: React.FC = () => {
           }`}
         >
           {targetsMuted ? '🔔 자동 경고 음소거 해제' : '🔇 자동 경고 음소거 (측정만)'}
+        </button>
+
+        <button
+          onClick={() => {
+            if (targetsRunning && !confirmStop) {
+              setConfirmStop(true);
+              return;
+            }
+            setConfirmStop(false);
+            void sendToTargets(
+              targetsRunning ? { type: 'STOP_MONITORING' } : { type: 'START_MONITORING' },
+              targetsRunning ? '⏹ 측정 정지를 요청했습니다.' : '▶ 측정 시작을 요청했습니다.'
+            );
+          }}
+          disabled={!selectedOnline}
+          className={`py-3 rounded-2xl border text-sm font-bold transition disabled:opacity-40 ${
+            targetsRunning
+              ? confirmStop
+                ? 'bg-rose-600 border-rose-500 text-white'
+                : 'bg-slate-900 border-slate-700 text-rose-300 hover:bg-slate-800'
+              : 'bg-emerald-700 border-emerald-500 text-white hover:bg-emerald-600'
+          }`}
+        >
+          {targetsRunning
+            ? confirmStop
+              ? '정말 측정을 정지할까요? (다시 누르면 정지)'
+              : '⏹ 소음 측정 정지'
+            : '▶ 소음 측정 시작'}
         </button>
 
         <button

@@ -94,6 +94,8 @@ export const App: React.FC = () => {
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState<boolean>(false);
 
   // 최신 상태 ref (원격 텔레메트리 콜백에서 사용)
+  const audioErrorRef = useRef<string | null>(audioError?.message ?? null);
+  audioErrorRef.current = audioError?.message ?? null;
   const customAudioNameRef = useRef<string | null>(customAudio?.name ?? null);
   customAudioNameRef.current = customAudio?.name ?? null;
 
@@ -196,6 +198,7 @@ export const App: React.FC = () => {
         schedule: cfg.schedule,
         stealthMode: cfg.stealthMode,
         battery: bat,
+        audioError: audioErrorRef.current,
         tuning: {
           baselineMode: cfg.baselineMode,
           manualBaselineDb: cfg.manualBaselineDb,
@@ -220,6 +223,17 @@ export const App: React.FC = () => {
     },
     onResetAlertSound: deleteCustomAudio,
     onSetMute: (muted) => updateConfig({ autoAlertMuted: muted }),
+    onStartMonitoring: async () => {
+      // 마이크 권한이 이미 허용된 기기에서만 터치 없이 시작 가능 (실패 시 audioError로 리모컨에 표시)
+      setMonitoringDesired(true);
+      await start();
+      await requestLock();
+    },
+    onStopMonitoring: () => {
+      setMonitoringDesired(false);
+      stop();
+      void releaseLock();
+    },
     onSetStealth: (enabled) => {
       updateConfig({ stealthMode: enabled });
       setStealthRevealed(false);
