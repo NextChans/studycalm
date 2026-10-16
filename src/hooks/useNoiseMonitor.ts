@@ -3,6 +3,7 @@ import { AudioEngine, AudioEngineError } from '../core/audio/AudioEngine';
 import { NoiseStateMachine } from '../core/machine/NoiseStateMachine';
 import { StateMachineSnapshot } from '../core/machine/types';
 import { SoundPlayer } from '../core/alert/SoundPlayer';
+import { VoiceFallback } from '../core/alert/VoiceFallback';
 import { CounterRepo } from '../core/storage/counterRepo';
 import { SettingsRepo } from '../core/storage/settingsRepo';
 import { CustomAudioRepo, CustomAudioItem } from '../core/storage/customAudioRepo';
@@ -182,6 +183,16 @@ export function useNoiseMonitor() {
     machineRef.current?.recalibrate();
   }, []);
 
+  const triggerManualAlert = useCallback(() => {
+    const nextCount = CounterRepo.increment();
+    setDailyAlertCount(nextCount);
+    playerRef.current?.playNextAlert();
+  }, []);
+
+  const speakTts = useCallback((text: string) => {
+    VoiceFallback.speak(text, config.volume);
+  }, [config.volume]);
+
   const dismissError = useCallback(() => {
     setAudioError(null);
   }, []);
@@ -200,6 +211,8 @@ export function useNoiseMonitor() {
     start,
     stop,
     recalibrate,
+    triggerManualAlert,
+    speakTts,
     dismissError,
   };
 }

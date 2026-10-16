@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNoiseMonitor } from './hooks/useNoiseMonitor';
 import { useWakeLock } from './hooks/useWakeLock';
 import { useVisibility } from './hooks/useVisibility';
@@ -9,10 +9,20 @@ import { BackgroundBanner } from './components/BackgroundBanner';
 import { UpdateBanner } from './components/UpdateBanner';
 import { AdminPinModal } from './components/AdminPinModal';
 import { SettingsModal } from './components/SettingsModal';
+import { RemoteConnectModal } from './components/RemoteConnectModal';
+import { RemoteControllerView } from './components/RemoteControllerView';
 import { FooterNotice } from './components/FooterNotice';
 import { registerServiceWorker, activateWaitingWorker } from './core/pwa/registerServiceWorker';
+import { RoomRepo } from './core/storage/roomRepo';
+import { RemoteClient } from './core/remote/RemoteClient';
 
 export const App: React.FC = () => {
+  // 모바일 원격 리모컨 라우트 감지 (/remote 또는 ?mode=remote)
+  const isRemoteRoute =
+    typeof window !== 'undefined' &&
+    (window.location.pathname.startsWith('/remote') ||
+      window.location.search.includes('mode=remote'));
+
   const {
     config,
     updateConfig,
@@ -27,6 +37,8 @@ export const App: React.FC = () => {
     start,
     stop,
     recalibrate,
+    triggerManualAlert,
+    speakTts,
     dismissError,
   } = useNoiseMonitor();
 
@@ -40,6 +52,12 @@ export const App: React.FC = () => {
   // 모달 상태
   const [isPinModalOpen, setIsPinModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
+  const [isRemoteModalOpen, setIsRemoteModalOpen] = useState<boolean>(false);
+
+  // 원격 통신 (태블릿 호스트)
+  const [roomId, setRoomId] = useState<string>(() => RoomRepo.getOrCreateRoomId());
+  const [isRemoteConnected, setIsRemoteConnected] = useState<boolean>(false);
+  const remoteClientRef = useRef<RemoteClient | null>(null);
 
   // PWA 서비스워커 등록
   useEffect(() => {
@@ -50,6 +68,53 @@ export const App: React.FC = () => {
       },
     });
   }, []);
+
+  // 태블릿 원격 통신 수신 클라이언트 초기화
+  useEffect(() => {
+    if (isRemoteRoute) return;
+
+    const client = new RemoteClient(roomId, 'tablet', (connected) => {
+      setIsRemoteConnected(connected);
+    });
+    client.connect();
+    remoteClientRef.current = client;
+
+    const unsubscribe = client.onMessage((msg) => {
+      if (msg.type === 'ALERT') {
+        triggerManualAlert();
+      } else if (msg.type === 'TTS') {
+        speakTts(msg.text);
+      } else if (msg.type === 'RECALIBRATE') {
+        recalibrate();
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      client.disconnect();
+    };
+  }, [roomId, isRemoteRoute, triggerManualAlert, speakTts, recalibrate]);
+
+  // 실시간 텔레메트리 (소음 수치, 카운터) 전송
+  useEffect(() => {
+    if (isRemoteRoute || !remoteClientRef.current || !isRemoteConnected) return;
+
+    const timer = setInterval(() => {
+      remoteClientRef.current?.sendMessage({
+        type: 'TELEMETRY',
+        data: {
+          currentDb: snapshot.currentDb,
+          smoothedDb: snapshot.smoothedDb,
+          baselineDb: snapshot.baselineDb,
+          thresholdDb: snapshot.thresholdDb,
+          state: snapshot.state,
+          dailyAlertCount,
+        },
+      });
+    }, 1500);
+
+    return () => clearInterval(timer);
+  }, [snapshot, dailyAlertCount, isRemoteConnected, isRemoteRoute]);
 
   const handleApplyUpdate = useCallback(() => {
     if (swRegistration) {
@@ -76,6 +141,16 @@ export const App: React.FC = () => {
     setIsPinModalOpen(false);
     setIsSettingsModalOpen(true);
   };
+
+  const handleRegenerateRoomId = () => {
+    const newId = RoomRepo.regenerateRoomId();
+    setRoomId(newId);
+  };
+
+  // 모바일 원격 리모컨 뷰 렌더링
+  if (isRemoteRoute) {
+    return <RemoteControllerView />;
+  }
 
   return (
     <div className="flex-1 flex flex-col justify-between bg-slate-950 text-slate-100 min-h-screen">
@@ -124,6 +199,20 @@ export const App: React.FC = () => {
             />
             <span>{isLocked ? '화면 켜짐 유지 중' : '화면 절전 모드'}</span>
           </div>
+
+          {/* 스마트폰 원격 리모컨 연결 버튼 */}
+          <button
+            onClick={() => setIsRemoteModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-800 text-xs font-bold transition shadow"
+          >
+            <span>📱</span>
+            <span className="hidden sm:inline">원격 리모컨</span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isRemoteConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'
+              }`}
+            />
+          </button>
 
           {/* 오늘 경고 횟수 카운터 */}
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-semibold">
@@ -209,6 +298,14 @@ export const App: React.FC = () => {
         onRecalibrate={recalibrate}
         onSaveCustomAudio={saveCustomAudio}
         onDeleteCustomAudio={deleteCustomAudio}
+      />
+
+      <RemoteConnectModal
+        isOpen={isRemoteModalOpen}
+        onClose={() => setIsRemoteModalOpen(false)}
+        roomId={roomId}
+        isConnected={isRemoteConnected}
+        onRegenerateRoomId={handleRegenerateRoomId}
       />
 
       {/* 하단 안심 문구 (고정) */}
