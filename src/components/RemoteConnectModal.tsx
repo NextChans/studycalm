@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { BrokerId } from '../core/remote/RemoteClient';
 
 interface RemoteConnectModalProps {
   isOpen: boolean;
@@ -7,6 +8,8 @@ interface RemoteConnectModalProps {
   roomId: string;
   onRegenerateRoomId: () => void;
   isConnected: boolean;
+  activeBroker?: BrokerId;
+  onToggleBroker?: () => void;
 }
 
 export const RemoteConnectModal: React.FC<RemoteConnectModalProps> = ({
@@ -15,14 +18,16 @@ export const RemoteConnectModal: React.FC<RemoteConnectModalProps> = ({
   roomId,
   onRegenerateRoomId,
   isConnected,
+  activeBroker = 'emqx',
+  onToggleBroker,
 }) => {
   const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
 
   const remoteUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}/?room=${roomId}`
-    : `https://studycalm-five.vercel.app/?room=${roomId}`;
+    ? `${window.location.origin}/?room=${roomId}&b=${activeBroker}`
+    : `https://studycalm-five.vercel.app/?room=${roomId}&b=${activeBroker}`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(remoteUrl);
@@ -46,18 +51,34 @@ export const RemoteConnectModal: React.FC<RemoteConnectModalProps> = ({
           </button>
         </div>
 
-        {/* 연결 상태 인디케이터 */}
-        <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-slate-950/80 border border-slate-800 text-xs">
-          <span className="text-slate-400">실시간 통신 상태:</span>
-          <div className="flex items-center gap-1.5">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400 animate-ping'
-              }`}
-            />
-            <span className={isConnected ? 'text-emerald-300 font-semibold' : 'text-amber-300 font-medium'}>
-              {isConnected ? '원격 수신 대기 중' : '클라우드 중계 연결 중...'}
+        {/* 연결 상태 인디케이터 및 서버 전환 */}
+        <div className="flex flex-col gap-2 p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-slate-400">실시간 통신 상태:</span>
+            <div className="flex items-center gap-1.5">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400 animate-ping'
+                }`}
+              />
+              <span className={isConnected ? 'text-emerald-300 font-semibold' : 'text-amber-300 font-medium'}>
+                {isConnected ? '원격 수신 대기 중' : '클라우드 중계 연결 중...'}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between pt-2 border-t border-slate-900 text-[11px]">
+            <span className="text-slate-400">
+              중계 서버: <strong className="text-slate-200">{activeBroker === 'hivemq' ? 'HiveMQ Cloud' : 'EMQX Cloud'}</strong>
             </span>
+            {onToggleBroker && (
+              <button
+                type="button"
+                onClick={onToggleBroker}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-bold transition"
+              >
+                {activeBroker === 'hivemq' ? 'EMQX로 변경' : 'HiveMQ로 변경'}
+              </button>
+            )}
           </div>
         </div>
 

@@ -14,7 +14,7 @@ import { RemoteControllerView } from './components/RemoteControllerView';
 import { FooterNotice } from './components/FooterNotice';
 import { registerServiceWorker, activateWaitingWorker } from './core/pwa/registerServiceWorker';
 import { RoomRepo } from './core/storage/roomRepo';
-import { RemoteClient } from './core/remote/RemoteClient';
+import { RemoteClient, BrokerId } from './core/remote/RemoteClient';
 
 export const App: React.FC = () => {
   // 모바일 원격 리모컨 라우트 감지 (/remote 또는 ?room= 또는 ?mode=remote)
@@ -41,24 +41,12 @@ export const App: React.FC = () => {
     triggerManualAlert,
     speakTts,
     dismissError,
-    unlockAudio,
   } = useNoiseMonitor();
 
   const { isLocked, requestLock, releaseLock } = useWakeLock();
   const { isBackground } = useVisibility();
 
-  // 첫 화면 터치 시 모바일 브라우저 오디오 오토플레이 언락
-  useEffect(() => {
-    const handleFirstTouch = () => {
-      unlockAudio();
-    };
-    window.addEventListener('click', handleFirstTouch, { once: true });
-    window.addEventListener('touchstart', handleFirstTouch, { once: true });
-    return () => {
-      window.removeEventListener('click', handleFirstTouch);
-      window.removeEventListener('touchstart', handleFirstTouch);
-    };
-  }, [unlockAudio]);
+
 
   // PWA 업데이트 감지 상태
   const [swRegistration, setSwRegistration] = useState<ServiceWorkerRegistration | null>(null);
@@ -72,6 +60,7 @@ export const App: React.FC = () => {
   // 원격 통신 (태블릿 호스트)
   const [roomId, setRoomId] = useState<string>(() => RoomRepo.getOrCreateRoomId());
   const [isRemoteConnected, setIsRemoteConnected] = useState<boolean>(false);
+  const [activeBroker, setActiveBroker] = useState<BrokerId>('emqx');
   const [remoteBroadcastText, setRemoteBroadcastText] = useState<string | null>(null);
   const remoteClientRef = useRef<RemoteClient | null>(null);
 
@@ -95,9 +84,17 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (isRemoteRoute) return;
 
-    const client = new RemoteClient(roomId, 'tablet', (connected) => {
-      setIsRemoteConnected(connected);
-    });
+    const client = new RemoteClient(
+      roomId,
+      'tablet',
+      (connected, brokerId) => {
+        setIsRemoteConnected(connected);
+        if (brokerId) {
+          setActiveBroker(brokerId);
+        }
+      },
+      activeBroker
+    );
     client.connect();
     remoteClientRef.current = client;
 
@@ -151,7 +148,7 @@ export const App: React.FC = () => {
       unsubscribe();
       client.disconnect();
     };
-  }, [roomId, isRemoteRoute, triggerManualAlert, speakTts, recalibrate]);
+  }, [roomId, isRemoteRoute, triggerManualAlert, speakTts, recalibrate, activeBroker]);
 
   // 실시간 텔레메트리 (소음 수치, 카운터) 전송
   useEffect(() => {
@@ -391,6 +388,12 @@ export const App: React.FC = () => {
         onClose={() => setIsRemoteModalOpen(false)}
         roomId={roomId}
         isConnected={isRemoteConnected}
+        activeBroker={activeBroker}
+        onToggleBroker={() => {
+          const next: BrokerId = activeBroker === 'emqx' ? 'hivemq' : 'emqx';
+          setActiveBroker(next);
+          remoteClientRef.current?.setBroker(next);
+        }}
         onRegenerateRoomId={handleRegenerateRoomId}
       />
 

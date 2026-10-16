@@ -50,32 +50,11 @@ export class SoundPlayer {
   }
 
   /**
-   * 사용자 터치 시 호출하여 iOS Safari & Android Chrome 오디오 서브시스템을 잠금 해제(Prime)
+   * 사용자 터치 시 호출하여 음성 합성 엔진을 준비
    */
   public unlock(): void {
     try {
       VoiceFallback.unlock();
-      const ctx = ChimeSynthesizer.getContext();
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
-      }
-      // 1. 인라인 Base64 무음 WAV로 즉시 브라우저 오디오 채널 언락 (네트워크 지연 0ms)
-      const silentDummy = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
-      silentDummy.setAttribute('playsinline', '');
-      silentDummy.volume = 0;
-      const p = silentDummy.play();
-      if (p !== undefined) {
-        p.then(() => {
-          silentDummy.pause();
-        }).catch(() => {});
-      }
-
-      // 2. 기본 경고음 파일들 백그라운드 프리로드
-      this.soundFiles.forEach((file) => {
-        const audio = new Audio();
-        audio.preload = 'auto';
-        audio.src = file;
-      });
     } catch {
       // ignore
     }

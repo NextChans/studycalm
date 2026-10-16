@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { RemoteClient } from '../core/remote/RemoteClient';
+import { RemoteClient, BrokerId } from '../core/remote/RemoteClient';
 import { TelemetryData } from '../core/remote/remoteTypes';
 
 interface RemoteControllerViewProps {
@@ -14,6 +14,15 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
       return params.get('room') || '';
     }
     return '';
+  });
+
+  const [brokerId, setBrokerId] = useState<BrokerId>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const b = params.get('b');
+      if (b === 'hivemq' || b === 'emqx') return b;
+    }
+    return 'emqx';
   });
 
   const [inputRoomId, setInputRoomId] = useState(roomId);
@@ -34,9 +43,15 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
   useEffect(() => {
     if (!roomId) return;
 
-    const client = new RemoteClient(roomId, 'remote', (connected) => {
-      setIsConnected(connected);
-    });
+    const client = new RemoteClient(
+      roomId,
+      'remote',
+      (connected, bId) => {
+        setIsConnected(connected);
+        if (bId) setBrokerId(bId);
+      },
+      brokerId
+    );
 
     client.connect();
     clientRef.current = client;
@@ -59,7 +74,7 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
       unsubscribe();
       client.disconnect();
     };
-  }, [roomId]);
+  }, [roomId, brokerId]);
 
   // 원격 즉시 경고 방송 송출
   const handleSendAlert = () => {
@@ -152,16 +167,29 @@ export const RemoteControllerView: React.FC<RemoteControllerViewProps> = ({ init
           </div>
         </div>
 
-        {/* 연결 배지 */}
-        <div
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-semibold ${
-            isConnected
-              ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
-              : 'bg-rose-950/60 border-rose-800 text-rose-300 animate-pulse'
-          }`}
-        >
-          <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-          <span>{isConnected ? '매장 연결됨' : '연결 중...'}</span>
+        {/* 연결 배지 및 서버 전환 */}
+        <div className="flex flex-col items-end gap-1">
+          <div
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-semibold ${
+              isConnected
+                ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
+                : 'bg-rose-950/60 border-rose-800 text-rose-300 animate-pulse'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+            <span>{isConnected ? '매장 연결됨' : '연결 중...'}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const next: BrokerId = brokerId === 'emqx' ? 'hivemq' : 'emqx';
+              setBrokerId(next);
+              clientRef.current?.setBroker(next);
+            }}
+            className="text-[10px] text-slate-400 hover:text-indigo-300 transition"
+          >
+            서버: {brokerId === 'hivemq' ? 'HiveMQ' : 'EMQX'} (전환)
+          </button>
         </div>
       </header>
 
