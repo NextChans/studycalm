@@ -127,6 +127,11 @@ export const App: React.FC = () => {
   }, [stealthRevealed]);
   const showStealth = !isRemoteRoute && config.stealthMode && !stealthRevealed && pinTarget === null;
 
+  // 브라우저가 저장공간 정리 시 페어링 키·설정을 지우지 않도록 영구 저장소 요청 (지원 브라우저만)
+  useEffect(() => {
+    void navigator.storage?.persist?.().catch(() => false);
+  }, []);
+
   // PWA 서비스워커 등록
   useEffect(() => {
     registerServiceWorker({

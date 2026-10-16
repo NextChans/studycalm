@@ -59,7 +59,9 @@ export const DEFAULT_CONFIG: NoiseConfig = {
   volume: 0.8,
   emaAlpha: 0.15,
   sampleIntervalMs: 50,
-  soundFiles: ['/sounds/alert-1.wav'],
+  // ?v= : 구버전 서비스워커가 캐시해 둔 '차임 전용' 옛 음원 대신 반드시 새 파일을 받도록 하는 캐시 버스터.
+  // 음원 파일을 교체하면 이 버전도 올릴 것
+  soundFiles: ['/sounds/alert-1.wav?v=3'],
 };
 
 /** 기준/임계치 조정 항목 (원격 리모컨에서 변경 가능한 범위) */

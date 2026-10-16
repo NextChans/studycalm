@@ -6,13 +6,13 @@ import { DEFAULT_CONFIG } from '../src/config/defaults';
 describe('SettingsRepo', () => {
   beforeEach(() => localStorage.clear());
 
-  it('구버전에 저장된 음원 목록(로테이션)은 무시하고 항상 같은 기본 음원을 사용한다', () => {
+  it('구버전에 저장된 음원 목록(로테이션·캐시버스터 없는 경로)은 무시하고 항상 같은 기본 음원을 사용한다', () => {
     localStorage.setItem(
       STORAGE_KEYS.SETTINGS,
       JSON.stringify({ soundFiles: ['/sounds/alert-2.mp3', '/sounds/alert-1.mp3'], volume: 0.5 })
     );
     const cfg = SettingsRepo.load();
-    expect(cfg.soundFiles).toEqual(['/sounds/alert-1.wav']);
+    expect(cfg.soundFiles).toEqual(['/sounds/alert-1.wav?v=3']);
     expect(cfg.soundFiles).toEqual(DEFAULT_CONFIG.soundFiles);
     expect(cfg.volume).toBe(0.5);
   });
