@@ -17,10 +17,11 @@ import { RoomRepo } from './core/storage/roomRepo';
 import { RemoteClient } from './core/remote/RemoteClient';
 
 export const App: React.FC = () => {
-  // 모바일 원격 리모컨 라우트 감지 (/remote 또는 ?mode=remote)
+  // 모바일 원격 리모컨 라우트 감지 (/remote 또는 ?room= 또는 ?mode=remote)
   const isRemoteRoute =
     typeof window !== 'undefined' &&
     (window.location.pathname.startsWith('/remote') ||
+      window.location.search.includes('room=') ||
       window.location.search.includes('mode=remote'));
 
   const {

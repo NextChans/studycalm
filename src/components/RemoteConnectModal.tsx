@@ -21,8 +21,8 @@ export const RemoteConnectModal: React.FC<RemoteConnectModalProps> = ({
   if (!isOpen) return null;
 
   const remoteUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}/remote?room=${roomId}`
-    : `https://studycalm-five.vercel.app/remote?room=${roomId}`;
+    ? `${window.location.origin}/?room=${roomId}`
+    : `https://studycalm-five.vercel.app/?room=${roomId}`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(remoteUrl);
