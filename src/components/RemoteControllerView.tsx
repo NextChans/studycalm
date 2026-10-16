@@ -21,6 +21,7 @@ import { ScheduleEditor } from './ScheduleEditor';
 import { ScheduleRule, sanitizeSchedule } from '../core/schedule/schedule';
 import { MAX_VOICE_BYTES, VOICE_CHUNK_INTERVAL_MS, VoiceMode, newClipId, splitVoiceClip } from '../core/remote/voiceClip';
 import { Collapsible } from './Collapsible';
+import { APP_VERSION } from '../hooks/useAppUpdate';
 
 /** 이 시간 동안 태블릿 텔레메트리가 없으면 오프라인으로 판단 */
 const TABLET_OFFLINE_AFTER_MS = 8_000;
@@ -116,6 +117,16 @@ function tabletIssues(link: TabletLinkState | undefined, now: number, openedAt: 
     issues.push({ id: 'stopped', text: '소음 측정이 멈춰 있음 (리모컨에서 시작 가능)', severity: 'critical' });
   if (!t.isAudioUnlocked)
     issues.push({ id: 'audio', text: '소리 출력 미허용 (태블릿 화면 한 번 터치 필요)', severity: 'warning' });
+  if (!t.appVersion) {
+    // 버전 정보를 보내지 않는 구버전 앱 — 새 설정(정시 안내 등)을 처리하지 못함
+    issues.push({ id: 'outdated', text: '구버전 앱 실행 중 — 태블릿 페이지를 한 번 새로고침해주세요', severity: 'critical' });
+  } else if (t.updateAvailable) {
+    issues.push({
+      id: 'update',
+      text: '새 버전 대기 중 (새벽 3~5시 자동 적용 · 태블릿 관리에서 즉시 적용 가능)',
+      severity: 'warning',
+    });
+  }
   if (t.battery && !t.battery.charging) {
     issues.push(
       t.battery.level <= LOW_BATTERY_PERCENT
@@ -842,6 +853,11 @@ export const RemoteControllerView: React.FC = () => {
                 key={`device-${selected}`}
                 name={selectedLink.telemetry.tabletName}
                 stealthMode={selectedLink.telemetry.stealthMode}
+                appVersion={selectedLink.telemetry.appVersion}
+                updateAvailable={!!selectedLink.telemetry.updateAvailable}
+                onApplyUpdate={() =>
+                  void sendToTargets({ type: 'APPLY_UPDATE' }, '🔄 태블릿에 업데이트 적용을 요청했습니다.')
+                }
                 onRename={(name) => sendToTargets({ type: 'SET_TABLET_NAME', name }, '📟 태블릿 이름을 변경했습니다.')}
                 onToggleStealth={() =>
                   void sendToTargets(
@@ -1156,9 +1172,12 @@ const RemoteDetectionPanel: React.FC<{
 const RemoteDevicePanel: React.FC<{
   name: string;
   stealthMode: boolean;
+  appVersion?: string;
+  updateAvailable: boolean;
   onRename: (name: string) => Promise<void>;
   onToggleStealth: () => void;
-}> = ({ name, stealthMode, onRename, onToggleStealth }) => {
+  onApplyUpdate: () => void;
+}> = ({ name, stealthMode, appVersion, updateAvailable, onRename, onToggleStealth, onApplyUpdate }) => {
   const [nameInput, setNameInput] = useState(name);
   const [editing, setEditing] = useState(false);
 
@@ -1206,6 +1225,26 @@ const RemoteDevicePanel: React.FC<{
         </button>
       </div>
 
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col">
+          <span className="text-xs font-semibold text-slate-200">앱 버전</span>
+          <span className={`text-[10px] font-mono ${updateAvailable || !appVersion ? 'text-amber-300' : 'text-slate-500'}`}>
+            태블릿 {appVersion ?? '구버전'} · 리모컨 {APP_VERSION}
+            {updateAvailable ? ' · 새 버전 있음' : ''}
+          </span>
+        </div>
+        <button
+          onClick={onApplyUpdate}
+          disabled={!appVersion || (!updateAvailable && appVersion === APP_VERSION)}
+          className="px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 bg-slate-800 text-indigo-300 disabled:opacity-40"
+        >
+          🔄 지금 업데이트
+        </button>
+      </div>
+      <p className="text-[10px] text-slate-500 leading-relaxed">
+        새 버전은 새벽 3~5시에 자동 적용됩니다. 지금 적용하면 태블릿이 새로고침되고 측정은 자동으로 다시 시작됩니다
+        (iPad는 새로고침 후 화면을 한 번 터치해야 소리가 납니다).
+      </p>
       <p className="text-[10px] text-slate-500 leading-relaxed">
         🔒 관리자 PIN 변경과 페어링 키 재발급은 보안을 위해 태블릿 화면에서만 할 수 있습니다.
       </p>

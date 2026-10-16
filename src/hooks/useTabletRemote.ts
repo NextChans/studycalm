@@ -39,6 +39,7 @@ export interface TabletRemoteHandlers {
   onSetSchedule: (rules: ScheduleRule[]) => void;
   onSetAlertVoice: (settings: AlertVoiceSettings) => void;
   onSetDetection: (settings: Partial<DetectionSettings>) => void;
+  onApplyUpdate: () => void;
   /** 정시 안내 규칙에 녹음 등록 (재생 불가 형식이면 false) */
   onSaveAnnounceClip: (ruleId: string, blob: Blob) => Promise<boolean>;
   /** 정시 안내 규칙 즉시 방송 (미리 듣기) */
@@ -189,6 +190,9 @@ export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers
               setTimeout(sendTelemetry, 100);
               break;
             }
+            case 'APPLY_UPDATE':
+              handlersRef.current.onApplyUpdate();
+              break;
             case 'SET_TABLET_NAME': {
               const saved = PairingRepo.setTabletName(body.name);
               tabletNameRef.current = saved;

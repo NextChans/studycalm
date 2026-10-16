@@ -38,6 +38,10 @@ export interface TelemetryData {
   audioError: string | null;
   /** 배터리 (지원하지 않는 기기는 null) */
   battery: { level: number; charging: boolean } | null;
+  /** 태블릿에서 실행 중인 앱 버전 */
+  appVersion: string;
+  /** 새 배포가 감지되어 적용 대기 중 */
+  updateAvailable: boolean;
   /** 감지·재경고·볼륨 세부 설정 */
   detection: DetectionSettings;
   /** 자동 경고 음성 방식 (기본 경고음 / 특정 멘트 / 랜덤 롤링) */
@@ -63,6 +67,8 @@ export type RemoteCommand =
   | VoiceChunk
   /** 감지·재경고·볼륨 세부 설정 변경 (태블릿에서 재검증 후 저장) */
   | { type: 'SET_DETECTION'; settings: Partial<DetectionSettings> }
+  /** 새 버전 즉시 적용 (태블릿 새로고침, 측정은 자동 재개) */
+  | { type: 'APPLY_UPDATE' }
   /** 태블릿 이름 변경 */
   | { type: 'SET_TABLET_NAME'; name: string }
   /** 자동 경고 음성 방식 변경 (태블릿에서 재검증 후 저장) */
@@ -118,6 +124,7 @@ const COMMAND_TYPES = new Set([
   'SET_ALERT_VOICE',
   'SET_DETECTION',
   'SET_TABLET_NAME',
+  'APPLY_UPDATE',
   'PING',
 ]);
 /** 조각 base64 길이 상한 (9KB → base64 12KB) */
