@@ -282,3 +282,42 @@ describe('NoiseStateMachine', () => {
     expect(machine.getBaseline()).toBe(-30);
   });
 });
+
+describe('NoiseStateMachine 수동 기준/임계치', () => {
+  it('수동 기준 모드는 보정 없이 즉시 MONITORING, 임계치=수동기준+오프셋', () => {
+    let t = 0;
+    const machine = new NoiseStateMachine(
+      { baselineMode: 'manual', manualBaselineDb: -55, thresholdOffsetDb: 10 },
+      {},
+      () => t
+    );
+    machine.start();
+    expect(machine.getState()).toBe('MONITORING');
+    expect(machine.getBaseline()).toBe(-55);
+    expect(machine.getThreshold()).toBe(-45);
+
+    // 재보정 요청에도 수동 기준 유지
+    machine.recalibrate();
+    t += 100;
+    machine.processSample(-20, -20);
+    expect(machine.getBaseline()).toBe(-55);
+  });
+
+  it('절대 임계치 모드는 기준과 무관하게 지정값을 사용한다', () => {
+    const machine = new NoiseStateMachine({ thresholdMode: 'absolute', absoluteThresholdDb: -38 }, {}, () => 0);
+    expect(machine.getThreshold()).toBe(-38);
+  });
+
+  it('측정 중 수동 기준으로 바꾸면 즉시 반영되고, 자동으로 되돌리면 재보정한다', () => {
+    let t = 0;
+    const machine = new NoiseStateMachine({ calibrationDurationMs: 1000 }, {}, () => t);
+    machine.start();
+    expect(machine.getState()).toBe('CALIBRATING');
+    machine.updateConfig({ baselineMode: 'manual', manualBaselineDb: -60 });
+    expect(machine.getState()).toBe('MONITORING');
+    expect(machine.getBaseline()).toBe(-60);
+    t += 10;
+    machine.updateConfig({ baselineMode: 'auto' });
+    expect(machine.getState()).toBe('CALIBRATING');
+  });
+});

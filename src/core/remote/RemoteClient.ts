@@ -1,171 +1,151 @@
-import mqtt, { MqttClient } from 'mqtt';
-import { RemoteMessage, OutgoingRemoteMessage } from './remoteTypes';
+import { PairingSession } from './pairing';
+import {
+  RemoteEnvelope,
+  RemotePayload,
+  RemoteRole,
+  RemoteCommand,
+  TabletEvent,
+  parseEnvelope,
+} from './remoteTypes';
+import { RemoteTransport, TransportStatus, createDefaultTransports } from './transports';
 
-export type MessageHandler = (message: RemoteMessage) => void;
-export type BrokerId = 'emqx' | 'hivemq';
+type IncomingFor<R extends RemoteRole> = R extends 'tablet' ? RemoteCommand : TabletEvent;
+type OutgoingFor<R extends RemoteRole> = R extends 'tablet' ? TabletEvent : RemoteCommand;
 
-export const BROKER_OPTIONS: Record<BrokerId, { name: string; url: string }> = {
-  emqx: {
-    name: 'EMQX Cloud',
-    url: 'wss://broker.emqx.io:8084/mqtt',
-  },
-  hivemq: {
-    name: 'HiveMQ Cloud',
-    url: 'wss://broker.hivemq.com:8884/mqtt',
-  },
-};
+export type MessageHandler<T extends RemotePayload> = (body: T, envelope: RemoteEnvelope<T>) => void;
 
-export class RemoteClient {
-  private client: MqttClient | null = null;
-  private roomId: string;
-  private role: 'tablet' | 'remote';
-  private topic: string;
-  private handlers: MessageHandler[] = [];
-  private isConnected: boolean = false;
-  private onStatusChange?: (connected: boolean, brokerId: BrokerId) => void;
-  private currentBrokerId: BrokerId;
-  private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
-  private autoFailoverEnabled: boolean = true;
+/** 기기 간 시계 오차를 감안한 재전송 허용 범위 */
+const MAX_CLOCK_SKEW_MS = 5 * 60_000;
+const SEEN_ID_LIMIT = 500;
+
+function randomId(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * 다중 중계(Supabase Realtime + EMQX + HiveMQ) 동시 송수신 클라이언트.
+ *
+ * - 한 브로커만 고르는 페일오버 방식은 태블릿과 리모컨이 서로 다른 브로커에 붙어 영원히 만나지 못하는
+ *   문제가 있었다. 모든 중계에 동시에 붙고 동시에 발행한 뒤, 수신 측에서 메시지 ID로 중복을 제거한다.
+ *   양쪽이 공통으로 닿는 중계가 하나라도 있으면 동기화된다.
+ * - 페이로드는 PairingSession으로 E2E 암호화되므로 공용 브로커를 사용해도 무방하다.
+ */
+export class RemoteClient<R extends RemoteRole> {
+  private readonly transports: RemoteTransport[];
+  private readonly handlers = new Set<MessageHandler<IncomingFor<R>>>();
+  private readonly seenIds = new Set<string>();
+  private readonly deviceId: string;
+  private started = false;
+  private readonly onWake = () => this.transports.forEach((t) => t.kick());
 
   constructor(
-    roomId: string,
-    role: 'tablet' | 'remote',
-    onStatusChange?: (connected: boolean, brokerId: BrokerId) => void,
-    initialBrokerId: BrokerId = 'emqx'
+    private readonly role: R,
+    private readonly session: PairingSession,
+    private readonly onStatusChange?: (statuses: TransportStatus[]) => void,
+    options?: { transports?: RemoteTransport[]; deviceId?: string }
   ) {
-    this.roomId = roomId;
-    this.role = role;
-    this.topic = `studycalm/v1/${roomId}`;
-    this.onStatusChange = onStatusChange;
-    this.currentBrokerId = initialBrokerId;
+    this.transports = options?.transports ?? createDefaultTransports();
+    this.deviceId = options?.deviceId ?? randomId();
   }
 
-  public getBrokerId(): BrokerId {
-    return this.currentBrokerId;
+  public getDeviceId(): string {
+    return this.deviceId;
   }
 
-  public setBroker(newBroker: BrokerId): void {
-    if (this.currentBrokerId === newBroker && this.isConnected) return;
-    this.currentBrokerId = newBroker;
-    this.autoFailoverEnabled = false;
-    this.disconnect();
-    this.connect();
+  public getStatuses(): TransportStatus[] {
+    return this.transports.map((t) => ({ id: t.id, label: t.label, connected: t.isConnected() }));
+  }
+
+  public isConnected(): boolean {
+    return this.transports.some((t) => t.isConnected());
   }
 
   public connect(): void {
-    if (this.client) return;
+    if (this.started) return;
+    this.started = true;
 
-    const brokerUrl = BROKER_OPTIONS[this.currentBrokerId].url;
-
-    // 만약 4초 내에 브로커 연결이 체결되지 않으면 다음 대체 브로커로 자동 페일오버
-    if (this.autoFailoverEnabled) {
-      if (this.fallbackTimer) clearTimeout(this.fallbackTimer);
-      this.fallbackTimer = setTimeout(() => {
-        if (!this.isConnected) {
-          console.warn(`[RemoteClient] Connection to ${this.currentBrokerId} timed out. Failing over to backup broker...`);
-          this.autoFailoverEnabled = false;
-          const nextBroker: BrokerId = this.currentBrokerId === 'emqx' ? 'hivemq' : 'emqx';
-          this.currentBrokerId = nextBroker;
-          this.disconnect();
-          this.connect();
-        }
-      }, 4000);
+    for (const transport of this.transports) {
+      transport.connect(
+        this.session.channelId,
+        (payload) => {
+          void this.handleIncoming(payload);
+        },
+        () => this.onStatusChange?.(this.getStatuses())
+      );
     }
+    this.onStatusChange?.(this.getStatuses());
 
-    const client = mqtt.connect(brokerUrl, {
-      clientId: `studycalm_${this.role}_${Math.random().toString(16).slice(2, 8)}`,
-      clean: true,
-      connectTimeout: 4000,
-      reconnectPeriod: 2500,
-      keepalive: 30, // 모바일 환경 웹소켓 절전/차단 방지 핑퐁 주기
-    });
-
-    this.client = client;
-
-    client.on('connect', () => {
-      if (this.fallbackTimer) {
-        clearTimeout(this.fallbackTimer);
-        this.fallbackTimer = null;
-      }
-      this.isConnected = true;
-      this.onStatusChange?.(true, this.currentBrokerId);
-
-      // 토픽 구독
-      client.subscribe(this.topic, { qos: 0 }, (err) => {
-        if (err) {
-          console.warn('[RemoteClient] Subscribe error:', err);
-        }
-      });
-    });
-
-    client.on('message', (topic, payload) => {
-      if (topic !== this.topic) return;
-
-      try {
-        const msg = JSON.parse(payload.toString()) as RemoteMessage;
-        // 자신이 보낸 메시지는 무시
-        if (msg.sender === this.role) return;
-
-        for (const handler of this.handlers) {
-          handler(msg);
-        }
-      } catch (e) {
-        console.warn('[RemoteClient] Failed to parse incoming message:', e);
-      }
-    });
-
-    client.on('error', (err) => {
-      console.warn(`[RemoteClient] MQTT error on ${this.currentBrokerId}:`, err);
-    });
-
-    client.on('close', () => {
-      this.isConnected = false;
-      this.onStatusChange?.(false, this.currentBrokerId);
-    });
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', this.onWake);
+      document.addEventListener('visibilitychange', this.onWake);
+    }
   }
 
-  public onMessage(handler: MessageHandler): () => void {
-    this.handlers.push(handler);
+  public onMessage(handler: MessageHandler<IncomingFor<R>>): () => void {
+    this.handlers.add(handler);
     return () => {
-      this.handlers = this.handlers.filter((h) => h !== handler);
+      this.handlers.delete(handler);
     };
   }
 
-  public sendMessage(partialMessage: OutgoingRemoteMessage): void {
-    if (!this.client || !this.isConnected) {
-      console.warn('[RemoteClient] Not connected. Cannot send message.');
-      return;
-    }
-
-    const fullMessage: RemoteMessage = {
-      ...partialMessage,
-      roomId: this.roomId,
+  /**
+   * @returns 메시지 ID (연결된 중계가 하나도 없으면 null)
+   */
+  public async send(body: OutgoingFor<R>): Promise<string | null> {
+    if (!this.isConnected()) return null;
+    const envelope: RemoteEnvelope = {
+      v: 2,
+      id: randomId(),
       sender: this.role,
-      timestamp: Date.now(),
-    } as RemoteMessage;
-
-    this.client.publish(this.topic, JSON.stringify(fullMessage), { qos: 0 });
+      deviceId: this.deviceId,
+      ts: Date.now(),
+      body,
+    };
+    this.markSeen(envelope.id);
+    const cipher = await this.session.encrypt(JSON.stringify(envelope));
+    for (const transport of this.transports) {
+      transport.publish(cipher);
+    }
+    return envelope.id;
   }
 
   public disconnect(): void {
-    if (this.fallbackTimer) {
-      clearTimeout(this.fallbackTimer);
-      this.fallbackTimer = null;
+    if (!this.started) return;
+    this.started = false;
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', this.onWake);
+      document.removeEventListener('visibilitychange', this.onWake);
     }
-    if (this.client) {
-      try {
-        this.client.end(true);
-      } catch {
-        // ignore
-      }
-      this.client = null;
+    for (const transport of this.transports) {
+      transport.disconnect();
     }
-    this.isConnected = false;
-    this.handlers = [];
-    this.onStatusChange?.(false, this.currentBrokerId);
+    this.onStatusChange?.(this.getStatuses());
   }
 
-  public getIsConnected(): boolean {
-    return this.isConnected;
+  private async handleIncoming(payload: string): Promise<void> {
+    if (payload.length > 4096) return;
+    const plain = await this.session.decrypt(payload);
+    if (plain === null) return; // 키가 다르거나 위·변조된 메시지
+
+    const envelope = parseEnvelope(plain);
+    if (!envelope || envelope.sender === this.role) return;
+    if (Math.abs(Date.now() - envelope.ts) > MAX_CLOCK_SKEW_MS) return;
+    if (this.seenIds.has(envelope.id)) return; // 다중 중계 중복 수신 및 재전송 차단
+    this.markSeen(envelope.id);
+
+    if (!this.started) return;
+    for (const handler of this.handlers) {
+      handler(envelope.body as IncomingFor<R>, envelope as RemoteEnvelope<IncomingFor<R>>);
+    }
+  }
+
+  private markSeen(id: string): void {
+    this.seenIds.add(id);
+    if (this.seenIds.size > SEEN_ID_LIMIT) {
+      const oldest = this.seenIds.values().next().value;
+      if (oldest !== undefined) this.seenIds.delete(oldest);
+    }
   }
 }

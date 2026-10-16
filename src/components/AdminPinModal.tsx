@@ -39,11 +39,23 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({ isOpen, onClose, o
       }
     } else {
       // 기존 PIN 검증
+      const lockedBefore = PinAuth.getLockoutRemainingMs();
+      if (lockedBefore > 0) {
+        setErrorMessage(`입력 시도가 너무 많습니다. ${Math.ceil(lockedBefore / 60_000)}분 후 다시 시도해주세요.`);
+        setPin('');
+        return;
+      }
       const isValid = await PinAuth.verifyPin(pin);
       if (isValid) {
+        setPin('');
         onSuccess();
       } else {
-        setErrorMessage('PIN 번호가 일치하지 않습니다.');
+        const locked = PinAuth.getLockoutRemainingMs();
+        setErrorMessage(
+          locked > 0
+            ? `PIN이 여러 번 틀려 ${Math.ceil(locked / 60_000)}분간 잠겼습니다.`
+            : 'PIN 번호가 일치하지 않습니다.'
+        );
         setPin('');
       }
     }

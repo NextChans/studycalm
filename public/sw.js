@@ -1,4 +1,4 @@
-const CACHE_NAME = 'studycalm-v2';
+const CACHE_NAME = 'studycalm-v3';
 
 const PRECACHE_ASSETS = [
   '/',
@@ -15,7 +15,8 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_ASSETS))
+      // HTTP 캐시(max-age)에 남은 구버전 음원을 프리캐시하지 않도록 반드시 네트워크에서 새로 받는다
+      .then((cache) => cache.addAll(PRECACHE_ASSETS.map((url) => new Request(url, { cache: 'reload' }))))
       .catch((err) => {
         console.warn('[SW] Precache failed (some assets might be missing):', err);
       })
@@ -40,8 +41,24 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // API나 외부 요청은 패스
-  if (event.request.method !== 'GET' || !url.origin.startsWith(self.location.origin)) {
+  // 외부 요청, 서버리스 API(/api/tts 등)는 서비스워커를 거치지 않는다
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
+    return;
+  }
+
+  // 경고 음원은 네트워크 우선 (파일 교체가 즉시 반영되도록), 오프라인일 때만 캐시 사용
+  if (url.pathname.startsWith('/sounds/')) {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-cache' })
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const cloned = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cloned));
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match(event.request))
+    );
     return;
   }
 
@@ -59,7 +76,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 해시된 assets 및 sounds는 캐시 우선 (Cache First)
+  // 해시된 assets는 캐시 우선 (Cache First)
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) {

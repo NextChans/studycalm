@@ -22,6 +22,13 @@ export class ChimeSynthesizer {
     }
   }
 
+  /** 컨텍스트를 새로 만들지 않고 현재 사용 중인 컨텍스트만 조회 */
+  public static peekContext(): AudioContext | null {
+    if (this.sharedCtx && this.sharedCtx.state !== 'closed') return this.sharedCtx;
+    if (this.fallbackCtx && this.fallbackCtx.state !== 'closed') return this.fallbackCtx;
+    return null;
+  }
+
   public static getContext(): AudioContext {
     if (typeof window === 'undefined') {
       throw new Error('Web Audio is not available.');
@@ -95,8 +102,10 @@ export class ChimeSynthesizer {
       osc2.start(now + 0.45);
       osc2.stop(now + 1.4);
 
-      return new Promise<void>((resolve) => {
-        setTimeout(resolve, 1400);
+      await new Promise<void>((resolve) => {
+        osc2.onended = () => resolve();
+        // 컨텍스트가 멈춘 경우 onended가 오지 않으므로 안전 타이머
+        setTimeout(resolve, 1600);
       });
     } catch (err) {
       console.warn('[ChimeSynthesizer] Failed to synthesize chime:', err);
