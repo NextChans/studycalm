@@ -16,6 +16,7 @@ import { registerServiceWorker, activateWaitingWorker } from './core/pwa/registe
 import { useTabletRemote } from './hooks/useTabletRemote';
 import { SoundPlayer } from './core/alert/SoundPlayer';
 import { useBattery } from './hooks/useBattery';
+import { useAppUpdate } from './hooks/useAppUpdate';
 import { StealthOverlay } from './components/StealthOverlay';
 import { describeRule, dueAnnouncements, localDateKey, nextAnnouncement } from './core/schedule/schedule';
 import { CustomAudioRepo } from './core/storage/customAudioRepo';
@@ -98,6 +99,9 @@ export const App: React.FC = () => {
     activeScheduleRule,
   } = useNoiseMonitor();
   const battery = useBattery();
+  const appUpdate = useAppUpdate(!isRemoteRoute, () => isPlaybackActive());
+  const appUpdateRef = useRef(appUpdate);
+  appUpdateRef.current = appUpdate;
 
   const { isLocked, requestLock, releaseLock } = useWakeLock();
   const { isBackground } = useVisibility();
@@ -248,6 +252,8 @@ export const App: React.FC = () => {
         battery: bat,
         audioError: audioErrorRef.current,
         announceVoices: announceVoicesRef.current,
+        appVersion: appUpdateRef.current.appVersion,
+        updateAvailable: appUpdateRef.current.updateAvailable,
         detection: {
           sustainMs: cfg.sustainMs,
           cooldownMs: cfg.cooldownMs,
@@ -314,6 +320,7 @@ export const App: React.FC = () => {
     },
     onSetAlertVoice: (settings) => updateConfig(settings),
     onSetDetection: (settings) => updateConfig(settings),
+    onApplyUpdate: () => void appUpdateRef.current.applyNow(),
     onSaveAnnounceClip: async (ruleId, blob) => {
       if (!(await SoundPlayer.canDecode(blob))) return false;
       await CustomAudioRepo.saveAnnounceClip(ruleId, blob);
