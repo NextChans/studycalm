@@ -20,7 +20,7 @@ const ALL = '__all__';
 const PRESET_PHRASES = [
   '조용히 해주세요.',
   '이용자 여러분, 정숙해 주시기 바랍니다.',
-  '대화나 잡담은 스터디존 밖에서 이용해 주세요.',
+  '휴게실 소리가 스터디존까지 들립니다. 목소리를 조금만 낮춰주세요.',
 ];
 
 const STATE_LABEL: Record<string, string> = {
