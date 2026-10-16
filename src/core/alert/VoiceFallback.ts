@@ -47,6 +47,9 @@ export class VoiceFallback {
       };
 
       try {
+        // 기존 묵음/지연 상태 큐 초기화
+        window.speechSynthesis.cancel();
+
         if (window.speechSynthesis.paused) {
           window.speechSynthesis.resume();
         }

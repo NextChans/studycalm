@@ -16,6 +16,7 @@ export class SoundPlayer {
   private currentIndex: number = 0;
   private isPlaying: boolean = false;
   private currentAudio: HTMLAudioElement | null = null;
+  private currentBufferSource: AudioBufferSourceNode | null = null;
   private onPlaybackStart?: () => void;
   private onPlaybackEnd?: () => void;
 
@@ -55,16 +56,10 @@ export class SoundPlayer {
   public unlock(): void {
     try {
       VoiceFallback.unlock();
-      ChimeSynthesizer.getContext();
-      const dummy = new Audio('/sounds/alert-1.wav');
-      dummy.volume = 0;
-      dummy
-        .play()
-        .then(() => {
-          dummy.pause();
-          dummy.currentTime = 0;
-        })
-        .catch(() => {});
+      const ctx = ChimeSynthesizer.getContext();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
     } catch {
       // ignore
     }
@@ -108,13 +103,84 @@ export class SoundPlayer {
     } finally {
       this.isPlaying = false;
       this.currentAudio = null;
+      this.currentBufferSource = null;
       if (this.onPlaybackEnd) {
         this.onPlaybackEnd();
       }
     }
   }
 
-  private playAudioFile(url: string): Promise<void> {
+  private async playAudioFile(url: string): Promise<void> {
+    // 1. 공유 AudioContext를 통한 Web Audio 버퍼 재생 우선 시도
+    // (iOS 사파리에서 HTML5 Audio 태그가 마이크 레코딩 세션을 가로채거나 중단시키는 현상 방지)
+    try {
+      const ctx = ChimeSynthesizer.getContext();
+      if (ctx && ctx.state !== 'closed') {
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+        await this.playViaWebAudio(ctx, url);
+        return;
+      }
+    } catch (webAudioErr) {
+      console.warn('[SoundPlayer] Web Audio playback failed, falling back to HTMLAudioElement:', webAudioErr);
+    }
+
+    // 2. HTMLAudioElement 폴백 재생
+    await this.playViaHtmlAudio(url);
+  }
+
+  private playViaWebAudio(ctx: AudioContext, url: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      fetch(url)
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+          return res.arrayBuffer();
+        })
+        .then((buf) => {
+          return new Promise<AudioBuffer>((resBuf, rejBuf) => {
+            ctx.decodeAudioData(buf, resBuf, rejBuf);
+          });
+        })
+        .then((audioBuffer) => {
+          const source = ctx.createBufferSource();
+          this.currentBufferSource = source;
+          source.buffer = audioBuffer;
+
+          const gainNode = ctx.createGain();
+          gainNode.gain.setValueAtTime(this.volume, ctx.currentTime);
+
+          source.connect(gainNode);
+          gainNode.connect(ctx.destination);
+
+          let isSettled = false;
+          const safetyTimer = setTimeout(() => {
+            if (!isSettled) {
+              isSettled = true;
+              try {
+                source.stop();
+              } catch {}
+              this.currentBufferSource = null;
+              resolve();
+            }
+          }, (audioBuffer.duration + 0.5) * 1000);
+
+          source.onended = () => {
+            if (!isSettled) {
+              isSettled = true;
+              clearTimeout(safetyTimer);
+              this.currentBufferSource = null;
+              resolve();
+            }
+          };
+
+          source.start();
+        })
+        .catch(reject);
+    });
+  }
+
+  private playViaHtmlAudio(url: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio(url);
       this.currentAudio = audio;
@@ -153,6 +219,14 @@ export class SoundPlayer {
   }
 
   public stop(): void {
+    if (this.currentBufferSource) {
+      try {
+        this.currentBufferSource.stop();
+      } catch {
+        // ignore
+      }
+      this.currentBufferSource = null;
+    }
     if (this.currentAudio) {
       this.currentAudio.pause();
       this.currentAudio.currentTime = 0;

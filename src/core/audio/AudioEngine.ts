@@ -1,6 +1,7 @@
 import { Detector } from './Detector';
 import { RmsDetector } from './RmsDetector';
 import { EmaFilter } from './EmaFilter';
+import { ChimeSynthesizer } from '../alert/ChimeSynthesizer';
 
 export type AudioEngineErrorType =
   | 'PERMISSION_DENIED'
@@ -22,6 +23,13 @@ export interface AudioEngineCallbacks {
   onError: (error: AudioEngineError) => void;
   /** 오디오 컨텍스트 상태 변경 콜백 */
   onStateChange?: (state: AudioContextState) => void;
+}
+
+interface StudyCalmGlobalWindow extends Window {
+  __studycalm_ctx?: AudioContext;
+  __studycalm_stream?: MediaStream;
+  __studycalm_source?: MediaStreamAudioSourceNode;
+  __studycalm_analyser?: AnalyserNode;
 }
 
 /**
@@ -58,6 +66,12 @@ export class AudioEngine {
   private callbacks: AudioEngineCallbacks;
   private intervalMs: number;
   private isRunning: boolean = false;
+  private boundVisibilityHandler: (() => void) | null = null;
+
+  // Stalled Buffer Watchdog (WebKit GC 및 오디오 세션 중단 감지 및 자가 치유)
+  private consecutiveDeadCount: number = 0;
+  private lastBufferSample1: number = 0;
+  private lastBufferSample2: number = 0;
 
   constructor(
     callbacks: AudioEngineCallbacks,
@@ -79,6 +93,10 @@ export class AudioEngine {
 
   public isActive(): boolean {
     return this.isRunning;
+  }
+
+  public getAudioContext(): AudioContext | null {
+    return this.audioContext;
   }
 
   /**
@@ -116,18 +134,33 @@ export class AudioEngine {
 
       this.mediaStream = stream;
 
-      // 마이크 트랙 종료 감지 및 자동 재획득 핸들러
+      // 마이크 트랙 인터럽트/음소거 및 종료 감지
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.onended = () => {
           this.handleTrackEnded();
         };
+        audioTrack.onmute = () => {
+          console.warn('[AudioEngine] Microphone track muted by iOS/system.');
+        };
+        audioTrack.onunmute = () => {
+          console.log('[AudioEngine] Microphone track unmuted. Resuming pipeline...');
+          if (this.audioContext && this.audioContext.state === 'suspended') {
+            this.audioContext.resume().catch(() => {});
+          }
+          this.recoverPipeline();
+        };
       }
 
       // 3. AudioContext 초기화
-      const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtxClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const ctx = new AudioCtxClass();
       this.audioContext = ctx;
+
+      // ChimeSynthesizer와 단일 AudioContext 공유 (iOS AudioSession 경합 및 마이크 차단 방지)
+      ChimeSynthesizer.setSharedContext(ctx);
 
       // AudioContext suspended 상태 감지 및 자동 복구 시도
       ctx.onstatechange = () => {
@@ -154,10 +187,24 @@ export class AudioEngine {
       source.connect(analyser);
       this.sourceNode = source;
 
+      // [핵심] WebKit / iOS Safari 가비지 컬렉터 버그 (WebKit Bug 172528) 원천 차단:
+      // 클래스 필드 참조만으로는 Safari의 JSC GC가 C++ MediaStreamAudioSourceNode를 회수하여
+      // 수십 초 후 버퍼 갱신이 영구 정지(-100dB 또는 고정값)되는 현상을 window 글로벌 앵커로 방지
+      if (typeof window !== 'undefined') {
+        const w = window as unknown as StudyCalmGlobalWindow;
+        w.__studycalm_ctx = ctx;
+        w.__studycalm_stream = stream;
+        w.__studycalm_source = source;
+        w.__studycalm_analyser = analyser;
+      }
+
+      // 5. 백그라운드 복귀 및 화면 켜짐 시 자동 복구 핸들러 등록
+      this.setupVisibilityRecovery();
+
       // 원본 오디오는 절대 저장하지 않으며, Float32Array 메모리 버퍼에서만 레벨 계산
       this.buffer = new Float32Array(analyser.fftSize);
 
-      // 5. 폴링 측정 루프 시작
+      // 6. 폴링 측정 루프 시작
       this.isRunning = true;
       this.startSamplingLoop();
     } catch (err: unknown) {
@@ -196,19 +243,29 @@ export class AudioEngine {
    */
   private startSamplingLoop(): void {
     this.stopSamplingLoop();
+    this.consecutiveDeadCount = 0;
 
     this.sampleIntervalId = setInterval(() => {
       if (!this.isRunning || !this.analyserNode || !this.buffer) {
         return;
       }
 
-      // 시간 영역 데이터 추출 (-1.0 ~ 1.0)
+      // 1. iOS Safari suspended 상태 감지 시 즉각 자동 복구
+      if (this.audioContext && this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
+      }
+
+      // 2. 시간 영역 데이터 추출 (-1.0 ~ 1.0)
       this.analyserNode.getFloatTimeDomainData(this.buffer);
 
-      // 레벨 계산 및 EMA 스무딩
+      // 3. 레벨 계산
       const rawDb = this.detector.process(this.buffer);
-      const smoothedDb = this.emaFilter.next(rawDb);
 
+      // 4. 버퍼 정체(Stalled) 워치독 검사 및 자가 치유
+      this.checkWatchdog(rawDb);
+
+      // 5. EMA 필터링 및 콜백
+      const smoothedDb = this.emaFilter.next(rawDb);
       this.callbacks.onLevelSample(rawDb, smoothedDb);
     }, this.intervalMs);
   }
@@ -218,6 +275,93 @@ export class AudioEngine {
       clearInterval(this.sampleIntervalId);
       this.sampleIntervalId = null;
     }
+  }
+
+  /**
+   * 실시간 오디오 버퍼 정체 감지 (Watchdog):
+   * iPadOS Safari에서 오디오 파이프라인이 멈춘 경우 자동으로 sourceNode를 재연결하여 복구
+   */
+  private checkWatchdog(rawDb: number): void {
+    if (!this.buffer || !this.isRunning) return;
+
+    // 버퍼가 전부 0이거나(-99dB 이하) 샘플들이 비트 단위로 동일하게 고정된 경우 정체로 판별
+    const isZero = rawDb <= -99;
+    const isFrozen =
+      this.buffer[0] === this.lastBufferSample1 &&
+      this.buffer[128] === this.lastBufferSample2;
+
+    if (isZero || isFrozen) {
+      this.consecutiveDeadCount++;
+    } else {
+      this.consecutiveDeadCount = 0;
+    }
+
+    this.lastBufferSample1 = this.buffer[0];
+    this.lastBufferSample2 = this.buffer[128];
+
+    // 약 1.5초(30틱) 동안 신호가 정체된 경우 자가 치유 실행
+    if (this.consecutiveDeadCount >= 30) {
+      this.consecutiveDeadCount = 0;
+      this.recoverPipeline();
+    }
+  }
+
+  /**
+   * 끊어진 오디오 파이프라인 자동 재연결 및 자가 치유
+   */
+  private recoverPipeline(): void {
+    if (!this.isRunning || !this.audioContext || !this.analyserNode) return;
+
+    console.warn('[AudioEngine] Stalled audio buffer detected. Running self-healing pipeline recovery...');
+
+    // AudioContext가 suspended인 경우 즉시 resume
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch((e) => console.warn('[AudioEngine] Resume failed during recovery:', e));
+    }
+
+    const track = this.mediaStream?.getAudioTracks()[0];
+    if (!track || track.readyState === 'ended') {
+      this.handleTrackEnded();
+      return;
+    }
+
+    if (this.mediaStream && this.audioContext) {
+      try {
+        if (this.sourceNode) {
+          try {
+            this.sourceNode.disconnect();
+          } catch {
+            // ignore
+          }
+        }
+        const newSource = this.audioContext.createMediaStreamSource(this.mediaStream);
+        newSource.connect(this.analyserNode);
+        this.sourceNode = newSource;
+
+        if (typeof window !== 'undefined') {
+          (window as unknown as StudyCalmGlobalWindow).__studycalm_source = newSource;
+        }
+        console.log('[AudioEngine] Successfully reconnected MediaStreamAudioSourceNode.');
+      } catch (err) {
+        console.warn('[AudioEngine] Reconnecting sourceNode failed, requesting full stream re-acquire:', err);
+        this.handleTrackEnded();
+      }
+    }
+  }
+
+  private setupVisibilityRecovery(): void {
+    if (typeof document === 'undefined') return;
+
+    this.boundVisibilityHandler = () => {
+      if (document.visibilityState === 'visible' && this.isRunning) {
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+          this.audioContext.resume().catch(() => {});
+        }
+        this.recoverPipeline();
+      }
+    };
+
+    document.addEventListener('visibilitychange', this.boundVisibilityHandler);
   }
 
   /**
@@ -240,14 +384,31 @@ export class AudioEngine {
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.onended = () => this.handleTrackEnded();
+        audioTrack.onmute = () => console.warn('[AudioEngine] Track muted by OS.');
+        audioTrack.onunmute = () => {
+          if (this.audioContext && this.audioContext.state === 'suspended') {
+            this.audioContext.resume().catch(() => {});
+          }
+          this.recoverPipeline();
+        };
       }
 
       if (this.audioContext && this.analyserNode) {
         if (this.sourceNode) {
-          this.sourceNode.disconnect();
+          try {
+            this.sourceNode.disconnect();
+          } catch {
+            // ignore
+          }
         }
         this.sourceNode = this.audioContext.createMediaStreamSource(stream);
         this.sourceNode.connect(this.analyserNode);
+
+        if (typeof window !== 'undefined') {
+          const w = window as unknown as StudyCalmGlobalWindow;
+          w.__studycalm_stream = stream;
+          w.__studycalm_source = this.sourceNode;
+        }
       }
     } catch (e) {
       console.error('[AudioEngine] Re-acquiring microphone failed:', e);
@@ -270,6 +431,21 @@ export class AudioEngine {
   }
 
   private cleanup(): void {
+    if (this.boundVisibilityHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.boundVisibilityHandler);
+      this.boundVisibilityHandler = null;
+    }
+
+    ChimeSynthesizer.setSharedContext(null);
+
+    if (typeof window !== 'undefined') {
+      const w = window as unknown as StudyCalmGlobalWindow;
+      delete w.__studycalm_ctx;
+      delete w.__studycalm_stream;
+      delete w.__studycalm_source;
+      delete w.__studycalm_analyser;
+    }
+
     if (this.sourceNode) {
       try {
         this.sourceNode.disconnect();
@@ -295,6 +471,7 @@ export class AudioEngine {
 
     this.analyserNode = null;
     this.buffer = null;
+    this.consecutiveDeadCount = 0;
     this.emaFilter.reset();
   }
 }

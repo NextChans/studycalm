@@ -4,24 +4,48 @@
  */
 export class ChimeSynthesizer {
   private static sharedCtx: AudioContext | null = null;
+  private static fallbackCtx: AudioContext | null = null;
+
+  /**
+   * AudioEngine의 AudioContext를 주입받아 단일 컨텍스트로 공유
+   * (iOS 사파리에서 여러 AudioContext 생성 시 발생하는 오디오 세션 경합 및 마이크 차단 방지)
+   */
+  public static setSharedContext(ctx: AudioContext | null): void {
+    this.sharedCtx = ctx;
+    if (ctx && this.fallbackCtx) {
+      try {
+        this.fallbackCtx.close().catch(() => {});
+      } catch {
+        // ignore
+      }
+      this.fallbackCtx = null;
+    }
+  }
 
   public static getContext(): AudioContext {
     if (typeof window === 'undefined') {
       throw new Error('Web Audio is not available.');
     }
 
-    if (!this.sharedCtx || this.sharedCtx.state === 'closed') {
+    if (this.sharedCtx && this.sharedCtx.state !== 'closed') {
+      if (this.sharedCtx.state === 'suspended') {
+        this.sharedCtx.resume().catch(() => {});
+      }
+      return this.sharedCtx;
+    }
+
+    if (!this.fallbackCtx || this.fallbackCtx.state === 'closed') {
       const AudioCtx =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.sharedCtx = new AudioCtx();
+      this.fallbackCtx = new AudioCtx();
     }
 
-    if (this.sharedCtx.state === 'suspended') {
-      this.sharedCtx.resume().catch(() => {});
+    if (this.fallbackCtx.state === 'suspended') {
+      this.fallbackCtx.resume().catch(() => {});
     }
 
-    return this.sharedCtx;
+    return this.fallbackCtx;
   }
 
   /**
