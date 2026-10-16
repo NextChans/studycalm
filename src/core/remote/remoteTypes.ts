@@ -38,6 +38,10 @@ export interface TelemetryData {
   audioError: string | null;
   /** 배터리 (지원하지 않는 기기는 null) */
   battery: { level: number; charging: boolean } | null;
+  /** 녹음 음성이 등록된 정시 안내 규칙 id 목록 */
+  announceVoices: string[];
+  /** 다음 정시 안내 설명 (없으면 null) */
+  nextAnnouncement: string | null;
   /** 커스텀 경고음 등록 여부와 이름 */
   customAlertName: string | null;
 }
@@ -53,6 +57,8 @@ export type RemoteCommand =
   | { type: 'ADJUST'; tuning: Partial<NoiseTuning> }
   /** 리모컨에서 녹음한 음성 조각 (mode=play: 즉시 방송, save: 경고음으로 등록) */
   | VoiceChunk
+  /** 정시 안내 규칙을 지금 한 번 방송 (미리 듣기) */
+  | { type: 'PLAY_ANNOUNCEMENT'; ruleId: string }
   /** 소음 측정 원격 시작/정지 (리모컨은 페어링 키를 가진 관리자이므로 PIN 없이 허용) */
   | { type: 'START_MONITORING' }
   | { type: 'STOP_MONITORING' }
@@ -98,11 +104,13 @@ const COMMAND_TYPES = new Set([
   'START_MONITORING',
   'STOP_MONITORING',
   'SET_SCHEDULE',
+  'PLAY_ANNOUNCEMENT',
   'PING',
 ]);
 /** 조각 base64 길이 상한 (9KB → base64 12KB) */
 const MAX_VOICE_DATA_CHARS = Math.ceil((VOICE_CHUNK_BYTES * 4) / 3) + 4;
 const EVENT_TYPES = new Set(['TELEMETRY', 'BROADCAST_STATUS']);
+const RULE_ID_RE = /^[a-z0-9]{1,16}$/i;
 
 /**
  * 복호화된 평문을 런타임 검증 (키를 가진 기기라도 형식이 틀린 메시지는 버림)
@@ -142,9 +150,12 @@ export function parseEnvelope(plain: string): RemoteEnvelope | null {
   if (body.type === 'SET_MUTE' && typeof body.muted !== 'boolean') return null;
   if (body.type === 'SET_STEALTH' && typeof body.enabled !== 'boolean') return null;
   if (body.type === 'SET_SCHEDULE' && !Array.isArray(body.rules)) return null;
+  if (body.type === 'PLAY_ANNOUNCEMENT' && (typeof body.ruleId !== 'string' || !RULE_ID_RE.test(body.ruleId))) {
+    return null;
+  }
 
   if (body.type === 'VOICE_CHUNK') {
-    const { clipId, seq, total, mime, mode, data } = body;
+    const { clipId, seq, total, mime, mode, slot, data } = body;
     if (
       typeof clipId !== 'string' ||
       !/^[0-9a-f]{8,32}$/.test(clipId) ||
@@ -156,7 +167,8 @@ export function parseEnvelope(plain: string): RemoteEnvelope | null {
       (seq as number) >= (total as number) ||
       typeof mime !== 'string' ||
       !/^audio\/[a-z0-9.+-]+(;[ a-z0-9=.,"-]*)?$/i.test(mime) ||
-      (mode !== 'play' && mode !== 'save') ||
+      (mode !== 'play' && mode !== 'save' && mode !== 'announce') ||
+      (mode === 'announce' ? typeof slot !== 'string' || !RULE_ID_RE.test(slot) : slot !== undefined) ||
       typeof data !== 'string' ||
       data.length === 0 ||
       data.length > MAX_VOICE_DATA_CHARS

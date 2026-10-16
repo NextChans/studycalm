@@ -17,7 +17,25 @@ import { useTabletRemote } from './hooks/useTabletRemote';
 import { SoundPlayer } from './core/alert/SoundPlayer';
 import { useBattery } from './hooks/useBattery';
 import { StealthOverlay } from './components/StealthOverlay';
-import { describeRule } from './core/schedule/schedule';
+import { describeRule, dueAnnouncements, localDateKey, nextAnnouncement } from './core/schedule/schedule';
+import { CustomAudioRepo } from './core/storage/customAudioRepo';
+
+/** 정시 안내 규칙별 마지막 방송 날짜 (하루 1회 보장, 새로고침에도 유지) */
+const readAnnounceFired = (): Record<string, string> => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEYS.ANNOUNCE_FIRED) ?? '{}') as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+};
+const writeAnnounceFired = (value: Record<string, string>) => {
+  try {
+    localStorage.setItem(STORAGE_KEYS.ANNOUNCE_FIRED, JSON.stringify(value));
+  } catch {
+    // ignore
+  }
+};
 import { STORAGE_KEYS } from './core/storage/storageKeys';
 
 /** 측정 중 여부를 저장해 재시작·새로고침 후 자동 재개 (숨김 설치 대응) */
@@ -69,6 +87,7 @@ export const App: React.FC = () => {
     triggerManualAlert,
     speakTts,
     playRemoteVoice,
+    playScheduledAnnouncement,
     previewAlert,
     stopPlayback,
     isOutputReady,
@@ -159,6 +178,35 @@ export const App: React.FC = () => {
 
   // 재시작·새로고침 후 자동 재개: 이전에 측정 중이었다면 터치 없이 다시 측정 시작
   // (마이크 권한이 이미 허용된 경우. 소리 출력은 Android 홈 화면 앱은 바로 가능, iPad는 화면 터치 필요)
+  // 정시 안내: 녹음이 등록된 규칙 목록 (텔레메트리로 리모컨에 표시)
+  const [announceVoices, setAnnounceVoices] = useState<string[]>([]);
+  const announceVoicesRef = useRef<string[]>([]);
+  announceVoicesRef.current = announceVoices;
+  const refreshAnnounceVoices = useCallback(() => {
+    void CustomAudioRepo.listAnnounceClipIds().then(setAnnounceVoices);
+  }, []);
+  useEffect(() => {
+    if (!isRemoteRoute) refreshAnnounceVoices();
+  }, [isRemoteRoute, refreshAnnounceVoices]);
+
+  // 정시 안내 발화: 15초마다 확인, 방송 시각부터 2분 안에 하루 1회 (태블릿 시계 기준)
+  useEffect(() => {
+    if (isRemoteRoute) return;
+    const tick = () => {
+      const now = new Date();
+      const fired = readAnnounceFired();
+      const due = dueAnnouncements(latestTelemetryRef.current.config.schedule, now, fired);
+      if (due.length === 0) return;
+      const today = localDateKey(now);
+      for (const rule of due) fired[rule.id] = today;
+      writeAnnounceFired(fired);
+      for (const rule of due) void playScheduledAnnouncement(rule);
+    };
+    tick();
+    const t = setInterval(tick, 15_000);
+    return () => clearInterval(t);
+  }, [isRemoteRoute, playScheduledAnnouncement]);
+
   const autoResumeTriedRef = useRef(false);
   useEffect(() => {
     if (isRemoteRoute || autoResumeTriedRef.current || !isMonitoringDesired()) return;
@@ -199,6 +247,15 @@ export const App: React.FC = () => {
         stealthMode: cfg.stealthMode,
         battery: bat,
         audioError: audioErrorRef.current,
+        announceVoices: announceVoicesRef.current,
+        nextAnnouncement: (() => {
+          const next = nextAnnouncement(cfg.schedule, new Date());
+          if (!next) return null;
+          const sameDay = localDateKey(next.at) === localDateKey(new Date());
+          return `${sameDay ? '오늘' : `${next.at.getMonth() + 1}/${next.at.getDate()}`} ${next.rule.start} · ${
+            next.rule.useVoice && announceVoicesRef.current.includes(next.rule.id) ? '녹음 음성' : next.rule.text
+          }`;
+        })(),
         tuning: {
           baselineMode: cfg.baselineMode,
           manualBaselineDb: cfg.manualBaselineDb,
@@ -238,7 +295,21 @@ export const App: React.FC = () => {
       updateConfig({ stealthMode: enabled });
       setStealthRevealed(false);
     },
-    onSetSchedule: (rules) => updateConfig({ schedule: rules }),
+    onSetSchedule: (rules) => {
+      updateConfig({ schedule: rules });
+      // 삭제된 안내 규칙의 녹음 정리
+      void CustomAudioRepo.pruneAnnounceClips(rules.map((r) => r.id)).then(refreshAnnounceVoices);
+    },
+    onSaveAnnounceClip: async (ruleId, blob) => {
+      if (!(await SoundPlayer.canDecode(blob))) return false;
+      await CustomAudioRepo.saveAnnounceClip(ruleId, blob);
+      refreshAnnounceVoices();
+      return true;
+    },
+    onPlayAnnouncement: async (ruleId) => {
+      const rule = latestTelemetryRef.current.config.schedule.find((r) => r.id === ruleId && r.mode === 'announce');
+      return rule ? playScheduledAnnouncement(rule) : false;
+    },
   });
 
   const handleApplyUpdate = useCallback(() => {
@@ -452,7 +523,13 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsModalOpen(false)}
         config={config}
         customAudio={customAudio}
-        onSave={updateConfig}
+        onSave={(next) => {
+          updateConfig(next);
+          if (next.schedule) {
+            const ids = next.schedule.map((r) => r.id);
+            void CustomAudioRepo.pruneAnnounceClips(ids).then(refreshAnnounceVoices);
+          }
+        }}
         onRecalibrate={recalibrate}
         activeBaselineDb={snapshot.baselineDb}
         liveDb={isAudioRunning ? snapshot.smoothedDb : null}

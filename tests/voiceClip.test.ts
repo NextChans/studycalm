@@ -58,3 +58,21 @@ describe('voiceClip 분할/재조립', () => {
     expect(parseEnvelope(env({ ...chunk, data: 'A'.repeat(20_000) }))).toBeNull();
   });
 });
+
+describe('voiceClip 정시 안내(announce) 조각', () => {
+  it('slot(규칙 id)을 보존해 재조립하고, 형식 검증한다', async () => {
+    const chunks = await splitVoiceClip(makeBlob(VOICE_CHUNK_BYTES + 5), 'announce', 'eeeeeeee33333333', 'rule01');
+    const asm = new VoiceClipAssembler();
+    asm.push(chunks[0], 'd');
+    const done = asm.push(chunks[1], 'd');
+    expect(done?.mode).toBe('announce');
+    expect(done?.slot).toBe('rule01');
+
+    const env = (body: object) =>
+      JSON.stringify({ v: 2, id: 'x', sender: 'remote', deviceId: 'd', ts: Date.now(), body });
+    expect(parseEnvelope(env(chunks[0]))).not.toBeNull();
+    expect(parseEnvelope(env({ ...chunks[0], slot: undefined }))).toBeNull(); // announce인데 slot 없음
+    expect(parseEnvelope(env({ ...chunks[0], slot: '../x' }))).toBeNull();
+    expect(parseEnvelope(env({ ...chunks[0], mode: 'play' }))).toBeNull(); // play인데 slot 있음
+  });
+});

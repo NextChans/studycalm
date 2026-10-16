@@ -231,3 +231,13 @@ describe('START_MONITORING / STOP_MONITORING 명령', () => {
     expect(parseEnvelope(env('tablet', { type: 'STOP_MONITORING' }))).toBeNull();
   });
 });
+
+describe('PLAY_ANNOUNCEMENT 명령 검증', () => {
+  it('규칙 id 형식이 틀리면 거부한다', () => {
+    const env = (body: object) =>
+      JSON.stringify({ v: 2, id: 'x', sender: 'remote', deviceId: 'd', ts: Date.now(), body });
+    expect(parseEnvelope(env({ type: 'PLAY_ANNOUNCEMENT', ruleId: 'abc123' }))).not.toBeNull();
+    expect(parseEnvelope(env({ type: 'PLAY_ANNOUNCEMENT', ruleId: '<script>' }))).toBeNull();
+    expect(parseEnvelope(env({ type: 'PLAY_ANNOUNCEMENT' }))).toBeNull();
+  });
+});

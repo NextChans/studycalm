@@ -5,8 +5,14 @@ interface VoiceRecorderProps {
   disabled: boolean;
   /** 대상 설명 (예: "1층 열람실" / "전체 3대") */
   targetLabel: string;
-  onBroadcast: (blob: Blob) => Promise<void>;
+  /** 없으면 '지금 방송' 버튼을 숨김 (정시 안내 녹음 등록용) */
+  onBroadcast?: (blob: Blob) => Promise<void>;
   onSaveAsAlert: (blob: Blob) => Promise<void>;
+  title?: string;
+  saveLabel?: string;
+  confirmLabel?: string;
+  confirmHint?: string;
+  compact?: boolean;
 }
 
 type Phase = 'idle' | 'recording' | 'recorded' | 'sending';
@@ -14,7 +20,17 @@ type Phase = 'idle' | 'recording' | 'recorded' | 'sending';
 /**
  * 리모컨 음성 녹음: 녹음 → 폰에서 미리듣기 → 즉시 방송 또는 경고음 등록
  */
-export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ disabled, targetLabel, onBroadcast, onSaveAsAlert }) => {
+export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
+  disabled,
+  targetLabel,
+  onBroadcast,
+  onSaveAsAlert,
+  title = '🎙 음성 녹음 방송',
+  saveLabel = '🔔 경고음으로 등록',
+  confirmLabel = '경고음 교체 확인',
+  confirmHint,
+  compact = false,
+}) => {
   const [phase, setPhase] = useState<Phase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [clip, setClip] = useState<{ blob: Blob; url: string } | null>(null);
@@ -130,7 +146,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ disabled, targetLa
     setPhase('sending');
     setError(null);
     try {
-      if (action === 'broadcast') await onBroadcast(clip.blob);
+      if (action === 'broadcast') await onBroadcast?.(clip.blob);
       else await onSaveAsAlert(clip.blob);
       setConfirmSave(false);
       setPhase('recorded'); // 같은 녹음으로 재방송 가능하도록 유지
@@ -141,9 +157,15 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ disabled, targetLa
   };
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
+    <div
+      className={
+        compact
+          ? 'flex flex-col gap-2'
+          : 'bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3'
+      }
+    >
       <div className="flex justify-between items-center">
-        <span className="text-xs font-bold text-slate-200">🎙 음성 녹음 방송</span>
+        <span className="text-xs font-bold text-slate-200">{title}</span>
         <span className="text-[10px] text-slate-500">최대 {MAX_VOICE_SECONDS}초</span>
       </div>
 
@@ -151,7 +173,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ disabled, targetLa
         <button
           onClick={start}
           disabled={disabled}
-          className="py-4 rounded-xl bg-rose-700/80 hover:bg-rose-600 disabled:opacity-50 text-white font-bold text-sm flex items-center justify-center gap-2 transition"
+          className={`${compact ? 'py-2.5' : 'py-4'} rounded-xl bg-rose-700/80 hover:bg-rose-600 disabled:opacity-50 text-white font-bold text-sm flex items-center justify-center gap-2 transition`}
         >
           <span className="w-3 h-3 rounded-full bg-white" />
           녹음 시작
@@ -171,14 +193,16 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ disabled, targetLa
       {(phase === 'recorded' || phase === 'sending') && clip && (
         <div className="flex flex-col gap-2">
           <audio src={clip.url} controls playsInline className="w-full h-10" />
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => void send('broadcast')}
-              disabled={disabled || phase === 'sending'}
-              className="py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition"
-            >
-              {phase === 'sending' ? '전송 중...' : '📢 지금 방송'}
-            </button>
+          <div className={`grid gap-2 ${onBroadcast ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            {onBroadcast && (
+              <button
+                onClick={() => void send('broadcast')}
+                disabled={disabled || phase === 'sending'}
+                className="py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition"
+              >
+                {phase === 'sending' ? '전송 중...' : '📢 지금 방송'}
+              </button>
+            )}
             <button
               onClick={() => void send('save')}
               disabled={disabled || phase === 'sending'}
@@ -186,12 +210,12 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ disabled, targetLa
                 confirmSave ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 hover:bg-slate-700 text-amber-300'
               }`}
             >
-              {confirmSave ? '경고음 교체 확인' : '🔔 경고음으로 등록'}
+              {phase === 'sending' && !onBroadcast ? '전송 중...' : confirmSave ? confirmLabel : saveLabel}
             </button>
           </div>
           {confirmSave && (
             <p className="text-[11px] text-amber-300">
-              [{targetLabel}]의 자동 경고음이 이 녹음으로 바뀝니다. 한 번 더 누르면 등록됩니다.
+              {confirmHint ?? `[${targetLabel}]의 자동 경고음이 이 녹음으로 바뀝니다. 한 번 더 누르면 등록됩니다.`}
             </p>
           )}
           <button onClick={discard} disabled={phase === 'sending'} className="text-[11px] text-slate-400 underline self-start">

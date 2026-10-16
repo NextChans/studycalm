@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { applySchedule } from '../core/schedule/schedule';
+import { applySchedule, ScheduleRule } from '../core/schedule/schedule';
 import { AudioEngine, AudioEngineError } from '../core/audio/AudioEngine';
 import { NoiseStateMachine } from '../core/machine/NoiseStateMachine';
 import { StateMachineSnapshot } from '../core/machine/types';
@@ -221,6 +221,24 @@ export function useNoiseMonitor() {
     return (await playerRef.current?.playAnnouncement(text)) ?? false;
   }, []);
 
+  /**
+   * 정시 안내 방송 (녹음 음성이 지정·등록되어 있으면 녹음, 아니면 텍스트 음성). 자동 경고 음소거와 무관하게 재생.
+   * 중지(stop) 시 남은 반복은 건너뜀.
+   */
+  const playScheduledAnnouncement = useCallback(async (rule: ScheduleRule): Promise<boolean> => {
+    const player = playerRef.current;
+    if (!player) return false;
+    const clip = rule.useVoice ? await CustomAudioRepo.getAnnounceClip(rule.id) : null;
+    if (!clip && !rule.text) return false;
+    let played = false;
+    for (let i = 0; i < Math.max(1, rule.repeat); i++) {
+      const ok = clip ? await player.playVoiceClip(clip) : await player.playAnnouncement(rule.text);
+      if (!ok) break;
+      played = true;
+    }
+    return played;
+  }, []);
+
   /** 리모컨 녹음 음성 즉시 방송 */
   const playRemoteVoice = useCallback(async (blob: Blob): Promise<boolean> => {
     return (await playerRef.current?.playVoiceClip(blob)) ?? false;
@@ -265,6 +283,7 @@ export function useNoiseMonitor() {
     triggerManualAlert,
     speakTts,
     playRemoteVoice,
+    playScheduledAnnouncement,
     previewAlert,
     stopPlayback,
     isOutputReady,

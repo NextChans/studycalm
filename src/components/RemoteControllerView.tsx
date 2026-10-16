@@ -6,6 +6,7 @@ import { NoiseTuning } from '../config/defaults';
 import { TabletLinkState, useRemoteFleet } from '../hooks/useRemoteFleet';
 import { TuningControls } from './TuningControls';
 import { VoiceRecorder } from './VoiceRecorder';
+import { STORAGE_KEYS } from '../core/storage/storageKeys';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ScheduleRule, sanitizeSchedule } from '../core/schedule/schedule';
 import { VOICE_CHUNK_INTERVAL_MS, VoiceMode, newClipId, splitVoiceClip } from '../core/remote/voiceClip';
@@ -17,7 +18,33 @@ const BROADCAST_TIMEOUT_MS = 30_000;
 const ADJUST_DEBOUNCE_MS = 400;
 const ALL = '__all__';
 
-const PRESET_PHRASES = [
+const PRESETS_LIMIT = 6;
+
+const loadPresets = (): string[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEYS.REMOTE_PRESETS) ?? 'null') as unknown;
+    if (Array.isArray(parsed)) {
+      const list = parsed
+        .filter((p): p is string => typeof p === 'string')
+        .map((p) => p.trim().slice(0, MAX_TTS_TEXT_LENGTH))
+        .filter(Boolean)
+        .slice(0, PRESETS_LIMIT);
+      if (list.length > 0) return list;
+    }
+  } catch {
+    // ignore
+  }
+  return [...DEFAULT_PRESET_PHRASES];
+};
+const savePresets = (list: string[]) => {
+  try {
+    localStorage.setItem(STORAGE_KEYS.REMOTE_PRESETS, JSON.stringify(list));
+  } catch {
+    // ignore
+  }
+};
+
+const DEFAULT_PRESET_PHRASES = [
   '조용히 해주세요.',
   '이용자 여러분, 정숙해 주시기 바랍니다.',
   '휴게실 소리가 스터디존까지 들립니다. 목소리를 조금만 낮춰주세요.',
@@ -100,6 +127,24 @@ export const RemoteControllerView: React.FC = () => {
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [presets, setPresets] = useState<string[]>(loadPresets);
+  const [editingPresets, setEditingPresets] = useState(false);
+  const [presetDraft, setPresetDraft] = useState<string[]>([]);
+  useEffect(() => {
+    if (editingPresets) setPresetDraft(presets);
+    // 편집을 시작할 때만 현재 프리셋을 복사
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingPresets]);
+  const finishPresetEdit = () => {
+    const cleaned = presetDraft
+      .map((p) => p.trim().slice(0, MAX_TTS_TEXT_LENGTH))
+      .filter(Boolean)
+      .slice(0, PRESETS_LIMIT);
+    const next = cleaned.length > 0 ? cleaned : [...DEFAULT_PRESET_PHRASES];
+    setPresets(next);
+    savePresets(next);
+    setEditingPresets(false);
+  };
 
   const [now, setNow] = useState(() => Date.now());
   const [customText, setCustomText] = useState('');
@@ -164,7 +209,7 @@ export const RemoteControllerView: React.FC = () => {
       }
       clearPending(key, event.requestId);
       // 경고음 등록/복원 결과는 태블릿이 보낸 문구를 그대로 표시
-      if (event.text.startsWith('경고음')) {
+      if (event.text.startsWith('경고음') || event.text.startsWith('안내 녹음')) {
         showToast(`${event.status === 'DONE' ? '✅' : '⚠️'} [${name}] ${event.text}`);
         return;
       }
@@ -231,10 +276,10 @@ export const RemoteControllerView: React.FC = () => {
   /**
    * 녹음 음성을 대상 태블릿들로 전송 (조각마다 암호화, 초당 전송 제한을 피하도록 간격을 둠)
    */
-  const sendVoice = async (blob: Blob, mode: VoiceMode) => {
+  const sendVoice = async (blob: Blob, mode: VoiceMode, slot?: string) => {
     if (targetKeys.length === 0) throw new Error('응답하는 태블릿이 없습니다.');
     const clipId = newClipId();
-    const chunks = await splitVoiceClip(blob, mode, clipId);
+    const chunks = await splitVoiceClip(blob, mode, clipId, slot);
     let delivered = 0;
     for (const key of targetKeys) {
       let ok = true;
@@ -263,7 +308,13 @@ export const RemoteControllerView: React.FC = () => {
     if (delivered === 0) throw new Error('중계 서버에 연결되어 있지 않습니다.');
     navigator.vibrate?.(80);
     const suffix = targetKeys.length > 1 ? ` (${delivered}대)` : '';
-    showToast(mode === 'play' ? `🎙 음성 방송을 전송했습니다${suffix}` : `🔔 경고음 등록 요청을 전송했습니다${suffix}`);
+    showToast(
+      mode === 'play'
+        ? `🎙 음성 방송을 전송했습니다${suffix}`
+        : mode === 'announce'
+          ? '📌 안내 녹음 등록 요청을 전송했습니다'
+          : `🔔 경고음 등록 요청을 전송했습니다${suffix}`
+    );
   };
 
   const handleSendTts = (text: string) => {
@@ -480,6 +531,9 @@ export const RemoteControllerView: React.FC = () => {
               {online && t?.activeSchedule && (
                 <p className="mt-1.5 text-[10px] text-sky-300">🕒 스케줄 적용 중: {t.activeSchedule}</p>
               )}
+              {online && t?.nextAnnouncement && (
+                <p className="mt-1 text-[10px] text-slate-400 truncate">📢 다음 안내: {t.nextAnnouncement}</p>
+              )}
               {link?.error && <p className="mt-1.5 text-[10px] text-rose-300">{link.error}</p>}
               {link?.fingerprint && selected === p.key && (
                 <p className="mt-1 text-[10px] font-mono text-slate-600">
@@ -578,9 +632,58 @@ export const RemoteControllerView: React.FC = () => {
         </button>
 
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
-          <span className="text-xs font-bold text-slate-200">📢 맞춤 멘트 방송</span>
+          <div className="flex justify-between items-center">
+            <span className="text-xs font-bold text-slate-200">📢 맞춤 멘트 방송</span>
+            <button
+              onClick={() => (editingPresets ? finishPresetEdit() : setEditingPresets(true))}
+              className="text-[11px] text-indigo-300 underline"
+            >
+              {editingPresets ? '편집 완료' : '멘트 편집'}
+            </button>
+          </div>
+          {editingPresets ? (
+            <div className="flex flex-col gap-2">
+              {presetDraft.map((phrase, i) => (
+                <div key={i} className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={phrase}
+                    maxLength={MAX_TTS_TEXT_LENGTH}
+                    onChange={(e) => setPresetDraft((prev) => prev.map((p, j) => (j === i ? e.target.value : p)))}
+                    className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    onClick={() => setPresetDraft((prev) => prev.filter((_, j) => j !== i))}
+                    className="px-2.5 rounded-xl bg-slate-800 text-rose-300 text-xs"
+                    aria-label="멘트 삭제"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <div className="flex justify-between">
+                {presetDraft.length < PRESETS_LIMIT ? (
+                  <button
+                    onClick={() => setPresetDraft((prev) => [...prev, ''])}
+                    className="text-[11px] text-indigo-300 underline"
+                  >
+                    + 멘트 추가
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-slate-500">최대 {PRESETS_LIMIT}개</span>
+                )}
+                <button
+                  onClick={() => setPresetDraft([...DEFAULT_PRESET_PHRASES])}
+                  className="text-[11px] text-slate-400 underline"
+                >
+                  기본값으로
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500">프리셋은 이 폰에 저장됩니다.</p>
+            </div>
+          ) : (
           <div className="grid grid-cols-1 gap-2">
-            {PRESET_PHRASES.map((phrase) => (
+            {presets.map((phrase) => (
               <button
                 key={phrase}
                 onClick={() => handleSendTts(phrase)}
@@ -591,6 +694,7 @@ export const RemoteControllerView: React.FC = () => {
               </button>
             ))}
           </div>
+          )}
           <div className="flex gap-2">
             <input
               type="text"
@@ -642,7 +746,12 @@ export const RemoteControllerView: React.FC = () => {
           <RemoteSchedulePanel
             key={`schedule-${selected}`}
             rules={selectedLink.telemetry.schedule}
+            announceVoices={selectedLink.telemetry.announceVoices ?? []}
             onSave={(rules) => sendToTargets({ type: 'SET_SCHEDULE', rules }, '🕒 스케줄을 저장했습니다.')}
+            onPlayAnnouncement={(ruleId) =>
+              void sendToTargets({ type: 'PLAY_ANNOUNCEMENT', ruleId }, '📢 안내 방송을 요청했습니다.')
+            }
+            onRecordAnnouncement={(ruleId, blob) => sendVoice(blob, 'announce', ruleId)}
           />
         )}
 
@@ -668,8 +777,54 @@ export const RemoteControllerView: React.FC = () => {
  */
 const RemoteSchedulePanel: React.FC<{
   rules: ScheduleRule[];
+  announceVoices: string[];
   onSave: (rules: ScheduleRule[]) => Promise<void>;
-}> = ({ rules, onSave }) => {
+  onPlayAnnouncement: (ruleId: string) => void;
+  onRecordAnnouncement: (ruleId: string, blob: Blob) => Promise<void>;
+}> = ({ rules, announceVoices, onSave, onPlayAnnouncement, onRecordAnnouncement }) => {
+  const [recordingFor, setRecordingFor] = useState<string | null>(null);
+
+  // 태블릿에 저장된 규칙만 녹음 등록·미리 듣기 가능 (녹음은 규칙 id에 연결되므로)
+  const renderAnnounceExtras = (rule: ScheduleRule) => {
+    const saved = !dirty && rules.some((r) => r.id === rule.id);
+    if (!saved) {
+      return <p className="text-[10px] text-slate-500">스케줄을 저장하면 녹음 등록과 미리 듣기를 할 수 있습니다.</p>;
+    }
+    const hasVoice = announceVoices.includes(rule.id);
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className={hasVoice ? 'text-emerald-300' : 'text-slate-500'}>
+            {hasVoice ? '🎙 녹음 등록됨' : '녹음 없음'}
+          </span>
+          <button onClick={() => onPlayAnnouncement(rule.id)} className="px-2 py-1 rounded-lg bg-slate-800 text-indigo-300">
+            ▶ 지금 한 번 방송
+          </button>
+          <button
+            onClick={() => setRecordingFor((cur) => (cur === rule.id ? null : rule.id))}
+            className="px-2 py-1 rounded-lg bg-slate-800 text-rose-300"
+          >
+            {recordingFor === rule.id ? '녹음 닫기' : hasVoice ? '🎙 다시 녹음' : '🎙 녹음하기'}
+          </button>
+        </div>
+        {recordingFor === rule.id && (
+          <VoiceRecorder
+            compact
+            disabled={false}
+            targetLabel={rule.start}
+            title={`🎙 ${rule.start} 안내 녹음`}
+            saveLabel="📌 이 안내에 녹음 등록"
+            confirmLabel="등록 확인"
+            confirmHint="이 안내 방송에 녹음이 등록됩니다. '녹음한 음성으로 방송'이 켜져 있어야 녹음으로 나갑니다. 한 번 더 누르면 등록됩니다."
+            onSaveAsAlert={async (blob) => {
+              await onRecordAnnouncement(rule.id, blob);
+              setRecordingFor(null);
+            }}
+          />
+        )}
+      </div>
+    );
+  };
   const [draft, setDraft] = useState<ScheduleRule[]>(rules);
   const [dirty, setDirty] = useState(false);
   const [open, setOpen] = useState(false);
@@ -693,6 +848,7 @@ const RemoteSchedulePanel: React.FC<{
               setDraft(next);
               setDirty(true);
             }}
+            renderAnnounceExtras={renderAnnounceExtras}
           />
           <div className="flex gap-2">
             <button
