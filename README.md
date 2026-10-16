@@ -1,2 +1,148 @@
-# studycalm
-스터디까페 소음측정기
+# StudyCalm (스터디카페 소음 경고 웹앱 MVP)
+
+스터디카페에 고정 설치한 태블릿에서 동작하는 정적 SPA 웹앱입니다.
+마이크로 주변 소음을 실시간 측정하고, 배경소음 기준선(Baseline) 대비 설정한 임계치를 지속 초과할 경우 "조용히 해주세요" 안내 음성을 자동으로 송출합니다.
+
+백엔드 서버 없이 정적 호스팅(Vercel)으로 구동되며, 프라이버시 보호를 위해 **오디오 데이터를 절대 녹음하거나 전송하지 않고 메모리 상에서 실시간 레벨(dBFS)만 계산**합니다.
+
+---
+
+## 🚀 주요 기능
+
+1. **마이크 입력 및 RMS/dBFS 측정**
+   - 브라우저 Web Audio API 기반 오디오 프로세싱.
+   - 왜곡 방지를 위해 `echoCancellation`, `noiseSuppression`, `autoGainControl` 하드웨어 프로세싱 비활성화.
+   - 시간영역 샘플 버퍼로부터 RMS를 계산하여 dBFS 변환 및 지수이동평균(EMA) 스무딩 적용.
+2. **배경소음 보정 (Baseline Calibration)**
+   - 앱 시작 시 30초간(설정 가능) 주변 소음을 측정하여 **중앙값(Median)**을 기준선(Baseline)으로 저장.
+   - 임계치는 `Baseline + N dB` (기본 +15dB) 상대값으로 자동 설정.
+   - 환경 변화 시 원클릭 `재보정` 기능 지원.
+3. **상태 머신 기반 판정 로직 (NoiseStateMachine)**
+   - `IDLE` → `CALIBRATING` → `MONITORING` ⇄ `EXCEEDING` → `ALERTING` → `COOLDOWN` → `MONITORING`
+   - 책 떨어뜨림 등 순간 소음 무시 (기본 1500ms 이상 연속 초과 시에만 경고).
+   - 일시적인 소음 하강을 허용하는 히스테리시스(기본 200ms) 지원.
+   - **피드백 루프 방지:** 음성 안내 재생 중 및 종료 후 1500ms 동안은 마이크 입력을 무시하여 스피커 소리가 다시 마이크로 유입되는 현상 차단.
+   - 과도한 연속 방송 방지를 위한 쿨다운(기본 45초).
+4. **안내 음성 재생 & TTS 폴백**
+   - `/sounds/` 디렉토리의 mp3 파일들을 로테이션 재생.
+   - 오디오 파일이 없거나 재생 실패 시 Web Speech API(`speechSynthesis`, ko-KR)로 즉시 폴백.
+5. **태블릿 가로(Landscape) 다크모드 UI**
+   - 대형 실시간 dBFS 게이지 미터, 기준선/임계치 마커선, 초과 지속 프로그레스 바.
+   - 관리자 PIN 4자리로 잠금 보호되는 설정 패널.
+   - 관리자 PIN은 코드에 하드코딩되지 않고 최초 실행 시 사용자가 직접 설정 (SHA-256 해시로 저장).
+   - 하단 고정 법적 안심 문구: *"소음 측정만 하며, 녹음·저장하지 않습니다"*.
+   - 당일 경고 횟수 카운터 (localStorage, 자정에 자동 0회 리셋).
+6. **운영 안정성 & PWA**
+   - Screen Wake Lock API 적용 및 `visibilitychange` 시 자동 재획득.
+   - 탭 백그라운드 전환 감지 및 경고 배너 표시.
+   - 마이크 트랙 종료 감지 시 자동 재연결 시도 및 실패 시 안내 UI.
+   - Service Worker 앱 셸/사운드 오프라인 프리캐시 & 새 버전 배포 시 새로고침 유도 배너.
+
+---
+
+## 🛠️ 기술 스택
+
+- **Frontend:** React 18, TypeScript (Strict), Vite
+- **Styling:** Tailwind CSS (Dark theme, Tablet Landscape layout)
+- **Audio Processing:** Web Audio API (`AudioContext`, `AnalyserNode`) - 외부 라이브러리 제로
+- **Storage:** LocalStorage (설정값, SHA-256 PIN 해시, 일일 카운터)
+- **Testing:** Vitest (상태 머신, RMS 감지기, EMA 필터, PIN 인증, 카운터)
+- **Lint & Format:** ESLint 9, Prettier
+- **Deployment:** Vercel (정적 SPA 호스팅, 보안 헤더 및 PWA 캐시 전략 적용)
+
+---
+
+## 💻 로컬 개발 및 실행
+
+### 필수 요구사항
+- Node.js 20+ 이상
+- npm 10+ 이상
+
+### 실행 명령어
+
+```bash
+# 의존성 설치
+npm install
+
+# 로컬 개발 서버 실행 (localhost는 HTTPS 예외로 마이크 허용됨)
+npm run dev
+
+# 테스트 실행 (Vitest 18개 단위 테스트)
+npm test
+
+# 타입 체크
+npm run typecheck
+
+# 린트 검사
+npm run lint
+
+# 프로덕션 빌드
+npm run build
+
+# 빌드 결과물 로컬 프리뷰
+npm run preview
+```
+
+---
+
+## 🔊 경고 음성 파일 교체 방법
+
+본 프로젝트의 `public/sounds/`에는 플레이스홀더 파일이 기본 포함되어 있습니다:
+- `public/sounds/alert-1.mp3`
+- `public/sounds/alert-2.mp3`
+
+실제 매장에서 사용할 음성 파일로 교체하려면:
+1. 안내 멘트(예: *"이용자 여러분, 정숙한 학습 환경을 위해 목소리를 조금만 낮춰주시기 바랍니다."*)를 녹음하거나 AI TTS(CLOVA Voice, Typecast 등)로 mp3 파일 생성.
+2. 생성한 mp3 파일을 `public/sounds/alert-1.mp3`, `alert-2.mp3` 등으로 덮어쓰기.
+3. 파일명을 변경하거나 개수를 늘리고 싶다면 `src/config/defaults.ts`의 `soundFiles` 배열을 수정:
+   ```typescript
+   export const DEFAULT_CONFIG: NoiseConfig = {
+     // ...
+     soundFiles: ['/sounds/study_warning_1.mp3', '/sounds/study_warning_2.mp3'],
+   };
+   ```
+4. 음원 파일이 누락되거나 재생할 수 없는 경우 브라우저 자체 음성 합성(SpeechSynthesis)으로 *"조용히 해주세요."*가 자동 출력됩니다.
+
+---
+
+## 📱 권장 기기 및 매장 설치 가이드
+
+### 1. 전원 및 디스플레이 설정
+- **상시 전원 충전:** 배터리 절전 모드로 진입하면 브라우저 타이머가 스로틀링될 수 있으므로 충전기를 상시 연결해 두세요.
+- **화면 자동 잠금 해제:** 태블릿 OS 설정(Android: `설정 > 디스플레이 > 화면 꺼짐 시간 > 안 함` 또는 개발자 옵션 `충전 중 화면 켜짐 유지` 활성화)에서 화면이 절대 꺼지지 않도록 설정합니다.
+
+### 2. 홈 화면에 PWA 설치
+1. 태블릿 브라우저(Android Chrome 또는 iOS Safari)로 배포된 URL에 접속합니다.
+2. 브라우저 메뉴에서 **[홈 화면에 추가]** 또는 **[앱 설치]**를 선택합니다.
+3. 홈 화면에 생성된 아이콘을 터치하여 실행하면 브라우저 주소창과 툴바가 사라진 **전체화면(Standalone) 키오스크 모드**로 실행됩니다.
+
+### 3. iOS (iPad / iPhone) 주의사항
+> ⚠️ **중요 (iOS Safari 백그라운드 제한):**
+> iOS WebKit 정책상 사용자가 전원 버튼을 눌러 화면을 잠그거나 다른 앱으로 전환하면 **마이크 오디오 입력 스트림이 브라우저 레벨에서 즉시 강제 중단(Mute)**됩니다.
+> 따라서 iPad를 모니터링 기기로 사용할 때는 화면 꺼짐 방지(Wake Lock)가 항상 유지되도록 화면을 켜둔 채 거치대 등에 고치하여 운용해야 합니다.
+
+---
+
+## 🔒 보안 및 캐시 정책 (`vercel.json`)
+
+- **Permissions-Policy:** `microphone=(self), camera=(), geolocation=()` (오직 자체 도메인에서만 마이크 권한을 허용하며 카메라/위치 정보는 원천 차단)
+- **Content-Security-Policy (CSP):**
+  - `default-src 'self'`: 외부 스크립트/리소스 로딩 원천 차단
+  - `media-src 'self' blob:`: 자체 음원 파일 및 TTS 오디오 블롭만 허용
+  - `script-src 'self'`: 정적 번들 스크립트만 실행
+- **캐시 제어:**
+  - `/sw.js`, `/index.html`, `/manifest.webmanifest`: `Cache-Control: no-cache`를 강제하여 버전 업데이트 시 서비스워커와 메인 HTML이 즉시 갱신되도록 보장
+  - `/assets/*`: 빌드 시 생성되는 해시 파일명 에셋으로 `max-age=31536000, immutable` 적용
+  - `/sounds/*`: 오프라인 캐시 및 네트워크 트래픽 절감을 위해 적정 캐시 적용
+
+---
+
+## 🧩 확장 지점 (Architecture Extension Point)
+
+현재는 오디오 입력의 RMS를 기반으로 하는 `RmsDetector`가 기본 구현되어 있습니다.
+추후 다른 감지 알고리즘으로 확장할 수 있도록 인터페이스가 분리되어 있습니다:
+
+- `src/core/audio/Detector.ts`: 감지기 공통 인터페이스
+- **추후 확장 가능 모델:**
+  1. **Bandpass Filter Detector:** 인간 음성 대역(300Hz ~ 3400Hz)만 통과시키는 BiquadFilter를 전처리하여 타자 소리/의자 끄는 소리와 사람 말소리를 구분.
+  2. **VAD (Voice Activity Detection):** `@ricky0123/vad-web` ONNX 경량 모델을 연결하여 단순 백시클 노이즈와 실제 음성을 정밀 분류.
