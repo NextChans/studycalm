@@ -17,3 +17,14 @@ describe('SettingsRepo', () => {
     expect(cfg.volume).toBe(0.5);
   });
 });
+
+describe('SettingsRepo 자동 경고 음소거', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('음소거 값은 true일 때만 켜진다 (손상된 값은 꺼짐으로 처리)', () => {
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify({ autoAlertMuted: 'yes' }));
+    expect(SettingsRepo.load().autoAlertMuted).toBe(false);
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify({ autoAlertMuted: true }));
+    expect(SettingsRepo.load().autoAlertMuted).toBe(true);
+  });
+});

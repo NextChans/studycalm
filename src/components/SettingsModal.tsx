@@ -284,6 +284,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* ==================== 기존 소음 판정 설정 항목 ==================== */}
 
+          {/* 0. 자동 경고 음소거 */}
+          <label className="flex items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800 cursor-pointer">
+            <div className="flex flex-col">
+              <span className="font-semibold text-slate-200 text-sm">🔇 자동 경고 음소거</span>
+              <span className="text-[11px] text-slate-400">
+                소음 측정은 계속하되 자동 경고 음성은 내보내지 않습니다. (원격 방송은 재생)
+              </span>
+            </div>
+            <input
+              type="checkbox"
+              checked={formData.autoAlertMuted}
+              onChange={(e) => handleChange('autoAlertMuted', e.target.checked)}
+              className="w-5 h-5 accent-indigo-500 shrink-0"
+            />
+          </label>
+
           {/* 1. 기준 / 임계치 (자동·수동) */}
           <TuningControls
             value={formData}

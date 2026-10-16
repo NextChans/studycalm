@@ -1,4 +1,5 @@
 import type { NoiseTuning } from '../../config/defaults';
+import { MAX_VOICE_CHUNKS, VOICE_CHUNK_BYTES, type VoiceChunk } from './voiceClip';
 
 export type RemoteRole = 'tablet' | 'remote';
 
@@ -22,6 +23,10 @@ export interface TelemetryData {
   remoteCount: number;
   /** 현재 기준/임계치 설정 */
   tuning: NoiseTuning;
+  /** 자동 경고 음소거 여부 */
+  autoAlertMuted: boolean;
+  /** 커스텀 경고음 등록 여부와 이름 */
+  customAlertName: string | null;
 }
 
 /** 리모컨 → 태블릿 */
@@ -33,6 +38,12 @@ export type RemoteCommand =
   | { type: 'STOP' }
   /** 기준/임계치 원격 조정 (태블릿에 영구 저장됨) */
   | { type: 'ADJUST'; tuning: Partial<NoiseTuning> }
+  /** 리모컨에서 녹음한 음성 조각 (mode=play: 즉시 방송, save: 경고음으로 등록) */
+  | VoiceChunk
+  /** 자동 경고 음소거 켜기/끄기 (태블릿에 저장됨) */
+  | { type: 'SET_MUTE'; muted: boolean }
+  /** 커스텀 경고음 삭제 → 기본 경고음으로 복원 */
+  | { type: 'RESET_ALERT_SOUND' }
   /** 리모컨이 화면을 보고 있는 동안 주기적으로 전송 (텔레메트리 요청 겸 접속 알림) */
   | { type: 'PING' };
 
@@ -54,7 +65,19 @@ export interface RemoteEnvelope<T extends RemotePayload = RemotePayload> {
   body: T;
 }
 
-const COMMAND_TYPES = new Set(['ALERT', 'TTS', 'RECALIBRATE', 'ADJUST', 'STOP', 'PING']);
+const COMMAND_TYPES = new Set([
+  'ALERT',
+  'TTS',
+  'RECALIBRATE',
+  'ADJUST',
+  'STOP',
+  'VOICE_CHUNK',
+  'RESET_ALERT_SOUND',
+  'SET_MUTE',
+  'PING',
+]);
+/** 조각 base64 길이 상한 (9KB → base64 12KB) */
+const MAX_VOICE_DATA_CHARS = Math.ceil((VOICE_CHUNK_BYTES * 4) / 3) + 4;
 const EVENT_TYPES = new Set(['TELEMETRY', 'BROADCAST_STATUS']);
 
 /**
@@ -81,7 +104,7 @@ export function parseEnvelope(plain: string): RemoteEnvelope | null {
     return null;
   }
 
-  const body = env.body as { type?: unknown; text?: unknown; tuning?: unknown };
+  const body = env.body as Record<string, unknown> & { type?: unknown; text?: unknown; tuning?: unknown };
   const allowed = env.sender === 'remote' ? COMMAND_TYPES : EVENT_TYPES;
   if (typeof body.type !== 'string' || !allowed.has(body.type)) return null;
 
@@ -92,6 +115,29 @@ export function parseEnvelope(plain: string): RemoteEnvelope | null {
   }
 
   if (body.type === 'ADJUST' && (!body.tuning || typeof body.tuning !== 'object')) return null;
+  if (body.type === 'SET_MUTE' && typeof body.muted !== 'boolean') return null;
+
+  if (body.type === 'VOICE_CHUNK') {
+    const { clipId, seq, total, mime, mode, data } = body;
+    if (
+      typeof clipId !== 'string' ||
+      !/^[0-9a-f]{8,32}$/.test(clipId) ||
+      !Number.isInteger(seq) ||
+      !Number.isInteger(total) ||
+      (total as number) < 1 ||
+      (total as number) > MAX_VOICE_CHUNKS ||
+      (seq as number) < 0 ||
+      (seq as number) >= (total as number) ||
+      typeof mime !== 'string' ||
+      !/^audio\/[a-z0-9.+-]+(;[ a-z0-9=.,"-]*)?$/i.test(mime) ||
+      (mode !== 'play' && mode !== 'save') ||
+      typeof data !== 'string' ||
+      data.length === 0 ||
+      data.length > MAX_VOICE_DATA_CHARS
+    ) {
+      return null;
+    }
+  }
 
   return env as RemoteEnvelope;
 }

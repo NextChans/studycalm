@@ -125,7 +125,8 @@ export class RemoteClient<R extends RemoteRole> {
   }
 
   private async handleIncoming(payload: string): Promise<void> {
-    if (payload.length > 4096) return;
+    // 음성 조각(약 16KB) 이상의 페이로드는 거부
+    if (payload.length > 32_768) return;
     const plain = await this.session.decrypt(payload);
     if (plain === null) return; // 키가 다르거나 위·변조된 메시지
 

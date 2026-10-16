@@ -2,6 +2,8 @@ export type BaselineMode = 'auto' | 'manual';
 export type ThresholdMode = 'offset' | 'absolute';
 
 export interface NoiseConfig {
+  /** 자동 경고 음소거: 측정·판정은 계속하되 자동 경고 음성은 재생하지 않음 (관리자 수동 방송은 재생) */
+  autoAlertMuted: boolean;
   /** 기준(배경소음) 결정 방식: auto=시작 시 자동 측정, manual=관리자 지정값 사용 */
   baselineMode: BaselineMode;
   /** 수동 기준값 (dBFS) */
@@ -35,6 +37,7 @@ export interface NoiseConfig {
 export const DB_RANGE = { min: -90, max: 0 } as const;
 
 export const DEFAULT_CONFIG: NoiseConfig = {
+  autoAlertMuted: false,
   baselineMode: 'auto',
   manualBaselineDb: -60,
   thresholdMode: 'offset',

@@ -14,6 +14,7 @@ import { RemoteControllerView } from './components/RemoteControllerView';
 import { FooterNotice } from './components/FooterNotice';
 import { registerServiceWorker, activateWaitingWorker } from './core/pwa/registerServiceWorker';
 import { useTabletRemote } from './hooks/useTabletRemote';
+import { SoundPlayer } from './core/alert/SoundPlayer';
 
 export const App: React.FC = () => {
   // 모바일 원격 리모컨 라우트 감지 (/remote, #k=페어링키, 구버전 ?room= 링크)
@@ -44,6 +45,7 @@ export const App: React.FC = () => {
     recalibrate,
     triggerManualAlert,
     speakTts,
+    playRemoteVoice,
     previewAlert,
     stopPlayback,
     isOutputReady,
@@ -66,6 +68,9 @@ export const App: React.FC = () => {
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState<boolean>(false);
 
   // 최신 상태 ref (원격 텔레메트리 콜백에서 사용)
+  const customAudioNameRef = useRef<string | null>(customAudio?.name ?? null);
+  customAudioNameRef.current = customAudio?.name ?? null;
+
   const latestTelemetryRef = useRef({ snapshot, dailyAlertCount, isAudioRunning, config });
   useEffect(() => {
     latestTelemetryRef.current = { snapshot, dailyAlertCount, isAudioRunning, config };
@@ -109,6 +114,8 @@ export const App: React.FC = () => {
         isAudioRunning: running,
         isAudioUnlocked: isOutputReady(),
         isPlaying: isPlaybackActive(),
+        customAlertName: customAudioNameRef.current,
+        autoAlertMuted: cfg.autoAlertMuted,
         tuning: {
           baselineMode: cfg.baselineMode,
           manualBaselineDb: cfg.manualBaselineDb,
@@ -123,6 +130,16 @@ export const App: React.FC = () => {
     onRecalibrate: recalibrate,
     onAdjust: updateConfig,
     onStop: stopPlayback,
+    onVoice: playRemoteVoice,
+    onSaveAlertSound: async (blob) => {
+      // 이 태블릿에서 재생할 수 없는 형식(예: 구형 iPad의 webm)은 등록하지 않는다
+      if (!(await SoundPlayer.canDecode(blob))) return false;
+      const stamp = new Date().toLocaleString('ko-KR', { hour12: false });
+      await saveCustomAudio(blob, `리모컨 녹음 (${stamp})`);
+      return true;
+    },
+    onResetAlertSound: deleteCustomAudio,
+    onSetMute: (muted) => updateConfig({ autoAlertMuted: muted }),
   });
 
   const handleApplyUpdate = useCallback(() => {
@@ -254,6 +271,12 @@ export const App: React.FC = () => {
       {/* 메인 모니터링 영역 (태블릿 가로 중앙 정렬) */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-6 py-6 flex flex-col justify-center items-center gap-6">
         {/* 상태 배지 */}
+        {config.autoAlertMuted && (
+          <div className="px-4 py-2 rounded-xl bg-slate-800 border border-slate-600 text-slate-200 text-sm font-bold">
+            🔇 자동 경고 음소거 중 · 측정만 진행합니다
+          </div>
+        )}
+
         <StatusBadge
           state={snapshot.state}
           calibrationProgress={snapshot.calibrationProgress}

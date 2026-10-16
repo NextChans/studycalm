@@ -5,6 +5,8 @@ import { PairingRepo, RemotePairing } from '../core/storage/pairingRepo';
 import { NoiseTuning } from '../config/defaults';
 import { TabletLinkState, useRemoteFleet } from '../hooks/useRemoteFleet';
 import { TuningControls } from './TuningControls';
+import { VoiceRecorder } from './VoiceRecorder';
+import { VOICE_CHUNK_INTERVAL_MS, VoiceMode, newClipId, splitVoiceClip } from '../core/remote/voiceClip';
 
 /** 이 시간 동안 태블릿 텔레메트리가 없으면 오프라인으로 판단 */
 const TABLET_OFFLINE_AFTER_MS = 8_000;
@@ -118,6 +120,11 @@ export const RemoteControllerView: React.FC = () => {
         return;
       }
       clearPending(key, event.requestId);
+      // 경고음 등록/복원 결과는 태블릿이 보낸 문구를 그대로 표시
+      if (event.text.startsWith('경고음')) {
+        showToast(`${event.status === 'DONE' ? '✅' : '⚠️'} [${name}] ${event.text}`);
+        return;
+      }
       const messages = {
         DONE: `✅ [${name}] 방송 완료`,
         STOPPED: `⏹ [${name}] 방송 중지됨`,
@@ -138,6 +145,9 @@ export const RemoteControllerView: React.FC = () => {
   const selectedOnline = selected === ALL ? targetKeys.length > 0 : isOnline(selectedLink, now);
   const targetBusy = targetKeys.some((k) => pending[k] || links[k]?.telemetry?.isPlaying);
   const canBroadcast = selectedOnline && !targetKeys.some((k) => pending[k]);
+  /** 대상이 모두 음소거 상태이면 버튼은 '해제', 하나라도 켜져 있으면 '음소거' */
+  const targetsMuted =
+    targetKeys.length > 0 && targetKeys.every((k) => links[k]?.telemetry?.autoAlertMuted === true);
 
   const sendToTargets = async (command: RemoteCommand, toast: string) => {
     if (targetKeys.length === 0) {
@@ -169,6 +179,44 @@ export const RemoteControllerView: React.FC = () => {
     }
     navigator.vibrate?.(command.type === 'ALERT' ? 200 : 80);
     showToast(targetKeys.length > 1 ? `${toast} (${sent}대)` : toast);
+  };
+
+  /**
+   * 녹음 음성을 대상 태블릿들로 전송 (조각마다 암호화, 초당 전송 제한을 피하도록 간격을 둠)
+   */
+  const sendVoice = async (blob: Blob, mode: VoiceMode) => {
+    if (targetKeys.length === 0) throw new Error('응답하는 태블릿이 없습니다.');
+    const clipId = newClipId();
+    const chunks = await splitVoiceClip(blob, mode, clipId);
+    let delivered = 0;
+    for (const key of targetKeys) {
+      let ok = true;
+      for (const chunk of chunks) {
+        if (!(await send(key, chunk))) {
+          ok = false;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, VOICE_CHUNK_INTERVAL_MS));
+      }
+      if (!ok) continue;
+      delivered++;
+      if (mode === 'play') {
+        setPending((prev) => ({ ...prev, [key]: clipId }));
+        const old = pendingTimersRef.current.get(key);
+        if (old) clearTimeout(old);
+        pendingTimersRef.current.set(
+          key,
+          setTimeout(() => {
+            pendingTimersRef.current.delete(key);
+            clearPending(key, clipId);
+          }, BROADCAST_TIMEOUT_MS)
+        );
+      }
+    }
+    if (delivered === 0) throw new Error('중계 서버에 연결되어 있지 않습니다.');
+    navigator.vibrate?.(80);
+    const suffix = targetKeys.length > 1 ? ` (${delivered}대)` : '';
+    showToast(mode === 'play' ? `🎙 음성 방송을 전송했습니다${suffix}` : `🔔 경고음 등록 요청을 전송했습니다${suffix}`);
   };
 
   const handleSendTts = (text: string) => {
@@ -303,6 +351,9 @@ export const RemoteControllerView: React.FC = () => {
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-2 h-2 rounded-full shrink-0 ${online ? 'bg-emerald-400' : 'bg-rose-500'}`} />
                   <span className="text-sm font-bold truncate">{nameOf(p.key, t?.tabletName)}</span>
+                  {online && t?.autoAlertMuted && (
+                    <span className="text-[10px] px-1.5 rounded bg-slate-700 text-slate-200 shrink-0">🔇 음소거</span>
+                  )}
                   {online && t?.isPlaying && (
                     <span className="text-[10px] px-1.5 rounded bg-rose-900 text-rose-200 shrink-0">방송 중</span>
                   )}
@@ -379,6 +430,23 @@ export const RemoteControllerView: React.FC = () => {
           </button>
         </div>
 
+        <button
+          onClick={() =>
+            void sendToTargets(
+              { type: 'SET_MUTE', muted: !targetsMuted },
+              targetsMuted ? '🔔 자동 경고 음소거를 해제했습니다.' : '🔇 자동 경고를 음소거했습니다. (측정은 계속)'
+            )
+          }
+          disabled={!selectedOnline}
+          className={`py-3 rounded-2xl border text-sm font-bold transition disabled:opacity-40 ${
+            targetsMuted
+              ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
+              : 'bg-slate-900 border-slate-700 text-slate-200 hover:bg-slate-800'
+          }`}
+        >
+          {targetsMuted ? '🔔 자동 경고 음소거 해제' : '🔇 자동 경고 음소거 (측정만)'}
+        </button>
+
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
           <span className="text-xs font-bold text-slate-200">📢 맞춤 멘트 방송</span>
           <div className="grid grid-cols-1 gap-2">
@@ -415,6 +483,30 @@ export const RemoteControllerView: React.FC = () => {
             </button>
           </div>
         </div>
+
+        <VoiceRecorder
+          disabled={!canBroadcast}
+          targetLabel={selected === ALL ? `전체 ${targetKeys.length}대` : nameOf(selected, selectedLink?.telemetry?.tabletName)}
+          onBroadcast={(blob) => sendVoice(blob, 'play')}
+          onSaveAsAlert={(blob) => sendVoice(blob, 'save')}
+        />
+
+        {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
+          <div className="flex items-center justify-between px-1 text-[11px] text-slate-400">
+            <span>
+              현재 경고음:{' '}
+              <strong className="text-slate-200">{selectedLink.telemetry.customAlertName ?? '기본 경고음'}</strong>
+            </span>
+            {selectedLink.telemetry.customAlertName && (
+              <button
+                onClick={() => void sendToTargets({ type: 'RESET_ALERT_SOUND' }, '↩️ 기본 경고음 복원을 요청했습니다.')}
+                className="underline text-sky-300"
+              >
+                기본 경고음으로 복원
+              </button>
+            )}
+          </div>
+        )}
 
         {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
           <RemoteTuningPanel

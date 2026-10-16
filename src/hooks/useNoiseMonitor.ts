@@ -28,6 +28,8 @@ export function useNoiseMonitor() {
 
   // Core references
   const initialConfigRef = useRef(config);
+  /** 상태 머신 콜백(최초 1회 생성)에서 최신 음소거 여부를 읽기 위한 ref */
+  const autoAlertMutedRef = useRef(config.autoAlertMuted);
   const machineRef = useRef<NoiseStateMachine | null>(null);
   const engineRef = useRef<AudioEngine | null>(null);
   const playerRef = useRef<SoundPlayer | null>(null);
@@ -74,6 +76,8 @@ export function useNoiseMonitor() {
       initialCfg,
       {
         onAlertTriggered: () => {
+          // 음소거 중에는 측정·판정(경고→쿨다운)만 진행하고 소리와 경고 횟수는 건너뜀
+          if (autoAlertMutedRef.current) return;
           const nextCount = CounterRepo.increment();
           setDailyAlertCount(nextCount);
           void playerRef.current?.playNextAlert();
@@ -144,6 +148,7 @@ export function useNoiseMonitor() {
     setConfig((prev) => {
       const merged = { ...prev, ...newConfig };
       SettingsRepo.save(merged);
+      autoAlertMutedRef.current = merged.autoAlertMuted;
       machineRef.current?.updateConfig(merged);
       if (newConfig.emaAlpha !== undefined) {
         engineRef.current?.setEmaAlpha(newConfig.emaAlpha);
@@ -203,6 +208,11 @@ export function useNoiseMonitor() {
     return (await playerRef.current?.playAnnouncement(text)) ?? false;
   }, []);
 
+  /** 리모컨 녹음 음성 즉시 방송 */
+  const playRemoteVoice = useCallback(async (blob: Blob): Promise<boolean> => {
+    return (await playerRef.current?.playVoiceClip(blob)) ?? false;
+  }, []);
+
   const previewAlert = useCallback(async (volume?: number): Promise<void> => {
     playerRef.current?.unlock();
     await playerRef.current?.playPreview(volume);
@@ -239,6 +249,7 @@ export function useNoiseMonitor() {
     recalibrate,
     triggerManualAlert,
     speakTts,
+    playRemoteVoice,
     previewAlert,
     stopPlayback,
     isOutputReady,
