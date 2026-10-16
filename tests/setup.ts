@@ -21,3 +21,10 @@ class LocalStorageMock {
 
 // @ts-expect-error polyfill for node test
 globalThis.localStorage = new LocalStorageMock();
+
+if (typeof URL.createObjectURL === 'undefined') {
+  URL.createObjectURL = () => 'blob:mock-audio-url';
+}
+if (typeof URL.revokeObjectURL === 'undefined') {
+  URL.revokeObjectURL = () => {};
+}

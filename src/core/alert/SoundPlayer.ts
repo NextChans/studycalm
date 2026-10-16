@@ -3,6 +3,7 @@ import { VoiceFallback } from './VoiceFallback';
 export interface SoundPlayerOptions {
   soundFiles: string[];
   volume: number;
+  customAudioUrl?: string | null;
   onPlaybackStart?: () => void;
   onPlaybackEnd?: () => void;
 }
@@ -10,6 +11,7 @@ export interface SoundPlayerOptions {
 export class SoundPlayer {
   private soundFiles: string[];
   private volume: number;
+  private customAudioUrl: string | null = null;
   private currentIndex: number = 0;
   private isPlaying: boolean = false;
   private currentAudio: HTMLAudioElement | null = null;
@@ -19,6 +21,7 @@ export class SoundPlayer {
   constructor(options: SoundPlayerOptions) {
     this.soundFiles = options.soundFiles.length > 0 ? options.soundFiles : ['/sounds/alert-1.mp3'];
     this.volume = options.volume;
+    this.customAudioUrl = options.customAudioUrl ?? null;
     this.onPlaybackStart = options.onPlaybackStart;
     this.onPlaybackEnd = options.onPlaybackEnd;
   }
@@ -37,12 +40,16 @@ export class SoundPlayer {
     }
   }
 
+  public setCustomAudioUrl(url: string | null): void {
+    this.customAudioUrl = url;
+  }
+
   public getIsPlaying(): boolean {
     return this.isPlaying;
   }
 
   /**
-   * 로테이션 방식으로 사운드 재생 시도. 실패 시 speechSynthesis로 자동 폴백.
+   * 커스텀 등록 음원 우선 재생 -> 로테이션 파일 재생 -> SpeechSynthesis 폴백
    */
   public async playNextAlert(): Promise<void> {
     if (this.isPlaying) return;
@@ -52,14 +59,28 @@ export class SoundPlayer {
       this.onPlaybackStart();
     }
 
-    const soundUrl = this.soundFiles[this.currentIndex];
-    this.currentIndex = (this.currentIndex + 1) % this.soundFiles.length;
-
     try {
-      await this.playAudioFile(soundUrl);
-    } catch (audioErr) {
-      console.warn(`[SoundPlayer] Failed to play ${soundUrl}. Falling back to SpeechSynthesis:`, audioErr);
-      await VoiceFallback.speak('조용히 해주세요.', this.volume);
+      // 1. 커스텀 등록 음원이 있는 경우 우선 재생
+      if (this.customAudioUrl) {
+        try {
+          await this.playAudioFile(this.customAudioUrl);
+          return;
+        } catch (customErr) {
+          console.warn('[SoundPlayer] Failed to play custom audio. Falling back to default list:', customErr);
+        }
+      }
+
+      // 2. 기본 음원 로테이션 파일 재생
+      const soundUrl = this.soundFiles[this.currentIndex];
+      this.currentIndex = (this.currentIndex + 1) % this.soundFiles.length;
+
+      try {
+        await this.playAudioFile(soundUrl);
+      } catch (audioErr) {
+        console.warn(`[SoundPlayer] Failed to play ${soundUrl}. Falling back to SpeechSynthesis:`, audioErr);
+        // 3. 브라우저 음성 합성 폴백
+        await VoiceFallback.speak('조용히 해주세요.', this.volume);
+      }
     } finally {
       this.isPlaying = false;
       this.currentAudio = null;

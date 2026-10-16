@@ -1,23 +1,57 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { DEFAULT_CONFIG, NoiseConfig } from '../config/defaults';
+import { CustomAudioItem } from '../core/storage/customAudioRepo';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: NoiseConfig;
+  customAudio: CustomAudioItem | null;
+  customAudioUrl: string | null;
   onSave: (newConfig: Partial<NoiseConfig>) => void;
   onRecalibrate: () => void;
+  onSaveCustomAudio: (blob: Blob, name: string) => Promise<void>;
+  onDeleteCustomAudio: () => Promise<void>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   config,
+  customAudio,
+  customAudioUrl,
   onSave,
   onRecalibrate,
+  onSaveCustomAudio,
+  onDeleteCustomAudio,
 }) => {
   const [formData, setFormData] = useState<NoiseConfig>({ ...config });
   const [saveToast, setSaveToast] = useState(false);
+
+  // 음원 미리듣기 상태
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // 음원 녹음 상태
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+    };
+  }, []);
 
   if (!isOpen) return null;
 
@@ -36,6 +70,95 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleResetDefaults = () => {
     setFormData({ ...DEFAULT_CONFIG });
+  };
+
+  // 1. 파일 업로드 핸들러
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      await onSaveCustomAudio(file, file.name);
+      e.target.value = '';
+    } catch (err) {
+      alert('오디오 파일 저장 중 오류가 발생했습니다: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  // 2. 즉석 녹음 시작/중지 핸들러
+  const handleStartRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || 'audio/webm' });
+        const now = new Date();
+        const fileName = `현장녹음_${now.getHours()}시${now.getMinutes()}분.webm`;
+        await onSaveCustomAudio(audioBlob, fileName);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      alert('마이크 녹음을 시작할 수 없습니다: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+    }
+  };
+
+  // 3. 미리 듣기 핸들러
+  const handleTogglePreview = () => {
+    if (isPlayingPreview && previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+      setIsPlayingPreview(false);
+      return;
+    }
+
+    const soundUrl = customAudioUrl || formData.soundFiles[0] || '/sounds/alert-1.mp3';
+    const audio = new Audio(soundUrl);
+    previewAudioRef.current = audio;
+    audio.volume = formData.volume;
+
+    audio.onended = () => {
+      setIsPlayingPreview(false);
+      previewAudioRef.current = null;
+    };
+    audio.onerror = () => {
+      setIsPlayingPreview(false);
+      previewAudioRef.current = null;
+    };
+
+    audio.play().catch(() => {
+      setIsPlayingPreview(false);
+      previewAudioRef.current = null;
+    });
+    setIsPlayingPreview(true);
   };
 
   return (
@@ -62,6 +185,105 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         )}
 
         <div className="flex flex-col gap-5 text-sm">
+          {/* ==================== 커스텀 음성 관리 섹션 ==================== */}
+          <div className="flex flex-col gap-3 bg-indigo-950/40 p-4 rounded-xl border border-indigo-800/80">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🎙️</span>
+                <span className="font-bold text-indigo-200">경고 음성 파일 관리</span>
+              </div>
+              <span
+                className={`text-[11px] px-2.5 py-1 rounded-full border font-semibold ${
+                  customAudio
+                    ? 'bg-emerald-950/80 border-emerald-600 text-emerald-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}
+              >
+                {customAudio ? '커스텀 음원 적용 중' : '기본 시스템 음원'}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              스터디카페 맞춤 안내 음성을 업로드하거나 태블릿에서 직접 녹음하여 즉시 적용할 수 있습니다. (서버 전송 없이 태블릿 기기에 안전하게 영구 저장됩니다)
+            </p>
+
+            {customAudio && (
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/80 border border-slate-700 text-xs text-slate-200">
+                <div className="flex items-center gap-2 truncate">
+                  <span className="text-emerald-400">✓</span>
+                  <span className="font-medium truncate">{customAudio.name}</span>
+                  <span className="text-slate-400 font-mono text-[11px]">
+                    ({Math.round(customAudio.size / 1024)} KB)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={onDeleteCustomAudio}
+                  className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[11px] font-semibold transition shrink-0 ml-2"
+                >
+                  기본음으로 복원
+                </button>
+              </div>
+            )}
+
+            {/* 업로드 & 녹음 버튼 그룹 */}
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              {/* 파일 업로드 */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition"
+              >
+                <span>📁</span>
+                <span>음원 파일 선택</span>
+              </button>
+
+              {/* 직접 녹음 버튼 */}
+              {isRecording ? (
+                <button
+                  type="button"
+                  onClick={handleStopRecording}
+                  className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white transition animate-pulse"
+                >
+                  <span>⏹</span>
+                  <span>녹음 중지 ({recordingSeconds}초)</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleStartRecording}
+                  className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition"
+                >
+                  <span>🔴</span>
+                  <span>지금 직접 녹음</span>
+                </button>
+              )}
+            </div>
+
+            {/* 미리 듣기 버튼 */}
+            <button
+              type="button"
+              onClick={handleTogglePreview}
+              className={`w-full py-2 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 ${
+                isPlayingPreview
+                  ? 'bg-amber-600 border-amber-500 text-white'
+                  : 'bg-indigo-900/60 hover:bg-indigo-800/80 border-indigo-700 text-indigo-200'
+              }`}
+            >
+              <span>{isPlayingPreview ? '⏹' : '▶'}</span>
+              <span>{isPlayingPreview ? '미리 듣기 정지' : '현재 안내 음성 미리 듣기'}</span>
+            </button>
+          </div>
+
+          {/* ==================== 기존 소음 판정 설정 항목 ==================== */}
+
           {/* 1. 임계치 오프셋 N dB */}
           <div className="flex flex-col gap-1.5 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
             <div className="flex justify-between items-center">

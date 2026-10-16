@@ -5,6 +5,7 @@ import { StateMachineSnapshot } from '../core/machine/types';
 import { SoundPlayer } from '../core/alert/SoundPlayer';
 import { CounterRepo } from '../core/storage/counterRepo';
 import { SettingsRepo } from '../core/storage/settingsRepo';
+import { CustomAudioRepo, CustomAudioItem } from '../core/storage/customAudioRepo';
 import { NoiseConfig } from '../config/defaults';
 
 export function useNoiseMonitor() {
@@ -22,12 +23,37 @@ export function useNoiseMonitor() {
   const [dailyAlertCount, setDailyAlertCount] = useState<number>(() => CounterRepo.getTodayCount());
   const [audioError, setAudioError] = useState<AudioEngineError | null>(null);
   const [isAudioRunning, setIsAudioRunning] = useState<boolean>(false);
+  const [customAudio, setCustomAudio] = useState<CustomAudioItem | null>(null);
+  const [customAudioUrl, setCustomAudioUrl] = useState<string | null>(null);
 
   // Core references
   const initialConfigRef = useRef(config);
   const machineRef = useRef<NoiseStateMachine | null>(null);
   const engineRef = useRef<AudioEngine | null>(null);
   const playerRef = useRef<SoundPlayer | null>(null);
+
+  // Load custom audio from IndexedDB on mount
+  useEffect(() => {
+    let activeUrl: string | null = null;
+    CustomAudioRepo.getAudio()
+      .then((item) => {
+        if (item) {
+          setCustomAudio(item);
+          activeUrl = URL.createObjectURL(item.blob);
+          setCustomAudioUrl(activeUrl);
+          playerRef.current?.setCustomAudioUrl(activeUrl);
+        }
+      })
+      .catch((e) => {
+        console.warn('[useNoiseMonitor] Failed to load custom audio:', e);
+      });
+
+    return () => {
+      if (activeUrl) {
+        URL.revokeObjectURL(activeUrl);
+      }
+    };
+  }, []);
 
   // Initialize instances once on mount
   useEffect(() => {
@@ -85,6 +111,34 @@ export function useNoiseMonitor() {
     };
   }, []);
 
+  // Save new custom audio
+  const saveCustomAudio = useCallback(async (blob: Blob, name: string) => {
+    const item = await CustomAudioRepo.saveAudio(blob, name);
+    setCustomAudio(item);
+
+    setCustomAudioUrl((prevUrl) => {
+      if (prevUrl) {
+        URL.revokeObjectURL(prevUrl);
+      }
+      const newUrl = URL.createObjectURL(item.blob);
+      playerRef.current?.setCustomAudioUrl(newUrl);
+      return newUrl;
+    });
+  }, []);
+
+  // Delete custom audio (revert to default)
+  const deleteCustomAudio = useCallback(async () => {
+    await CustomAudioRepo.deleteAudio();
+    setCustomAudio(null);
+    setCustomAudioUrl((prevUrl) => {
+      if (prevUrl) {
+        URL.revokeObjectURL(prevUrl);
+      }
+      playerRef.current?.setCustomAudioUrl(null);
+      return null;
+    });
+  }, []);
+
   // Update configurations when config changes
   const updateConfig = useCallback((newConfig: Partial<NoiseConfig>) => {
     setConfig((prev) => {
@@ -139,6 +193,10 @@ export function useNoiseMonitor() {
     dailyAlertCount,
     audioError,
     isAudioRunning,
+    customAudio,
+    customAudioUrl,
+    saveCustomAudio,
+    deleteCustomAudio,
     start,
     stop,
     recalibrate,

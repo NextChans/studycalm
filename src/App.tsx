@@ -20,6 +20,10 @@ export const App: React.FC = () => {
     dailyAlertCount,
     audioError,
     isAudioRunning,
+    customAudio,
+    customAudioUrl,
+    saveCustomAudio,
+    deleteCustomAudio,
     start,
     stop,
     recalibrate,
@@ -199,8 +203,12 @@ export const App: React.FC = () => {
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
         config={config}
+        customAudio={customAudio}
+        customAudioUrl={customAudioUrl}
         onSave={updateConfig}
         onRecalibrate={recalibrate}
+        onSaveCustomAudio={saveCustomAudio}
+        onDeleteCustomAudio={deleteCustomAudio}
       />
 
       {/* 하단 안심 문구 (고정) */}
