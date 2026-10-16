@@ -1,9 +1,11 @@
 # StudyCalm (스터디카페 소음 경고 웹앱 MVP)
 
+> 🔁 개발을 이어받는다면 먼저 [docs/HANDOFF.md](docs/HANDOFF.md)(인수인계)와 [AGENTS.md](AGENTS.md)(작업 규칙)를 읽으세요.
+
 스터디카페에 고정 설치한 태블릿에서 동작하는 정적 SPA 웹앱입니다.
 마이크로 주변 소음을 실시간 측정하고, 배경소음 기준선(Baseline) 대비 설정한 임계치를 지속 초과할 경우 "조용히 해주세요" 안내 음성을 자동으로 송출합니다.
 
-백엔드 서버 없이 정적 호스팅(Vercel)으로 구동되며, 프라이버시 보호를 위해 **오디오 데이터를 절대 녹음하거나 전송하지 않고 메모리 상에서 실시간 레벨(dBFS)만 계산**합니다.
+백엔드 서버 없이 정적 호스팅(Vercel, TTS용 Edge Function 1개)으로 구동되며, 프라이버시 보호를 위해 **오디오 데이터를 절대 녹음하거나 전송하지 않고 메모리 상에서 실시간 레벨(dBFS)만 계산**합니다.
 
 ---
 
@@ -25,9 +27,10 @@
    - 과도한 연속 방송 방지를 위한 쿨다운(기본 45초).
 4. **안내 음성 관리 (커스텀 음성 업로드 및 직접 녹음) & TTS 폴백**
    - **태블릿 현장 파일 업로드:** 관리자 설정 창에서 직접 녹음한 `.mp3`, `.wav`, `.m4a` 등 음원 파일을 선택하여 즉시 등록.
-   - **태블릿 현장 즉석 녹음 🎙️:** 별도 파일이 없어도 설정 창에서 [지금 직접 녹음] 버튼을 눌러 점주님 육성으로 현장에서 5초간 즉석 녹음 후 적용 가능.
+   - **태블릿 현장 즉석 녹음 🎙️:** 별도 파일이 없어도 설정 창에서 [지금 직접 녹음] 버튼을 눌러 점주님 육성으로 현장에서 즉석 녹음 후 적용 가능 (리모컨에서도 최대 15초 녹음 → 즉시 방송/경고음 등록).
    - **로컬 영구 보관:** 브라우저 IndexedDB에 저장되어 서버 전송 없이 영구 보존되며, [미리 듣기] 및 [기본음으로 복원] 제공.
-   - **폴백:** 등록된 음원이 없을 시 `/sounds/` 디렉토리 파일 로테이션 재생 및 Web Speech API(`speechSynthesis`, ko-KR)로 폴백.
+   - **자동 경고 음성 방식:** 기본 경고음(`/sounds/alert-1.wav`, 모든 태블릿 동일) / 특정 멘트 고정 / 멘트 랜덤 롤링(TTS).
+   - **재생 경로:** 공유 Web Audio 컨텍스트 → HTMLAudio → Web Speech API(`speechSynthesis`) 순 폴백. TTS는 `/api/tts` Edge 프록시 사용.
 5. **태블릿 가로(Landscape) 다크모드 UI**
    - 대형 실시간 dBFS 게이지 미터, 기준선/임계치 마커선, 초과 지속 프로그레스 바.
    - 관리자 PIN 4자리로 잠금 보호되는 설정 패널.
@@ -54,8 +57,10 @@
 - **Frontend:** React 18, TypeScript (Strict), Vite
 - **Styling:** Tailwind CSS (Dark theme, Tablet Landscape layout)
 - **Audio Processing:** Web Audio API (`AudioContext`, `AnalyserNode`) - 외부 라이브러리 제로
-- **Storage:** LocalStorage (설정값, SHA-256 PIN 해시, 일일 카운터)
-- **Testing:** Vitest (상태 머신, RMS 감지기, EMA 필터, PIN 인증, 카운터)
+- **Storage:** LocalStorage (설정값, SHA-256 PIN 해시, 일일 카운터, 페어링 키) + IndexedDB (커스텀 경고음, 안내 녹음)
+- **Remote Relay:** Supabase Realtime Broadcast + 공용 MQTT(EMQX/HiveMQ), AES-GCM 종단간 암호화
+- **Edge Function:** `api/tts.ts` (Google Cloud TTS 또는 폴백)
+- **Testing:** Vitest (상태 머신, RMS 감지기, EMA 필터, PIN 인증, 카운터, 원격 프로토콜, 음성 조각, 스케줄, 설정 검증)
 - **Lint & Format:** ESLint 9, Prettier
 - **Deployment:** Vercel (정적 SPA 호스팅, 보안 헤더 및 PWA 캐시 전략 적용)
 
@@ -191,10 +196,11 @@ Safari는 개인정보 보호를 이유로 배터리 정보(Battery Status API)�
   - `default-src 'self'`: 외부 스크립트/리소스 로딩 원천 차단
   - `media-src 'self' blob:`: 자체 음원 파일 및 TTS 오디오 블롭만 허용
   - `script-src 'self'`: 정적 번들 스크립트만 실행
+  - `connect-src`: 자체 도메인 + Supabase(`*.supabase.co`) + `wss://broker.emqx.io:8084`, `wss://broker.hivemq.com:8884`만 허용
 - **캐시 제어:**
-  - `/sw.js`, `/index.html`, `/manifest.webmanifest`: `Cache-Control: no-cache`를 강제하여 버전 업데이트 시 서비스워커와 메인 HTML이 즉시 갱신되도록 보장
+  - `/sw.js`, `/index.html`, `/manifest.webmanifest`, `/version.json`: `Cache-Control: no-cache`를 강제하여 버전 업데이트 시 서비스워커와 메인 HTML이 즉시 갱신되도록 보장
   - `/assets/*`: 빌드 시 생성되는 해시 파일명 에셋으로 `max-age=31536000, immutable` 적용
-  - `/sounds/*`: 오프라인 캐시 및 네트워크 트래픽 절감을 위해 적정 캐시 적용
+  - `/sounds/*`: `max-age=0, must-revalidate` (음원 교체 시 `?v=` 버전도 함께 올릴 것)
 
 ---
 
