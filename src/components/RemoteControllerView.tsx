@@ -145,6 +145,9 @@ export const RemoteControllerView: React.FC = () => {
   const selectedOnline = selected === ALL ? targetKeys.length > 0 : isOnline(selectedLink, now);
   const targetBusy = targetKeys.some((k) => pending[k] || links[k]?.telemetry?.isPlaying);
   const canBroadcast = selectedOnline && !targetKeys.some((k) => pending[k]);
+  /** 대상이 모두 음소거 상태이면 버튼은 '해제', 하나라도 켜져 있으면 '음소거' */
+  const targetsMuted =
+    targetKeys.length > 0 && targetKeys.every((k) => links[k]?.telemetry?.autoAlertMuted === true);
 
   const sendToTargets = async (command: RemoteCommand, toast: string) => {
     if (targetKeys.length === 0) {
@@ -348,6 +351,9 @@ export const RemoteControllerView: React.FC = () => {
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-2 h-2 rounded-full shrink-0 ${online ? 'bg-emerald-400' : 'bg-rose-500'}`} />
                   <span className="text-sm font-bold truncate">{nameOf(p.key, t?.tabletName)}</span>
+                  {online && t?.autoAlertMuted && (
+                    <span className="text-[10px] px-1.5 rounded bg-slate-700 text-slate-200 shrink-0">🔇 음소거</span>
+                  )}
                   {online && t?.isPlaying && (
                     <span className="text-[10px] px-1.5 rounded bg-rose-900 text-rose-200 shrink-0">방송 중</span>
                   )}
@@ -423,6 +429,23 @@ export const RemoteControllerView: React.FC = () => {
             <span>중지</span>
           </button>
         </div>
+
+        <button
+          onClick={() =>
+            void sendToTargets(
+              { type: 'SET_MUTE', muted: !targetsMuted },
+              targetsMuted ? '🔔 자동 경고 음소거를 해제했습니다.' : '🔇 자동 경고를 음소거했습니다. (측정은 계속)'
+            )
+          }
+          disabled={!selectedOnline}
+          className={`py-3 rounded-2xl border text-sm font-bold transition disabled:opacity-40 ${
+            targetsMuted
+              ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
+              : 'bg-slate-900 border-slate-700 text-slate-200 hover:bg-slate-800'
+          }`}
+        >
+          {targetsMuted ? '🔔 자동 경고 음소거 해제' : '🔇 자동 경고 음소거 (측정만)'}
+        </button>
 
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
           <span className="text-xs font-bold text-slate-200">📢 맞춤 멘트 방송</span>

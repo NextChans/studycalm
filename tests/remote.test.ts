@@ -201,3 +201,12 @@ describe('PairingRepo (다중 태블릿)', () => {
     expect(PairingRepo.rotateTabletKey()).not.toBe(before);
   });
 });
+
+describe('SET_MUTE 명령 검증', () => {
+  it('muted가 boolean이 아니면 거부한다', () => {
+    const env = (body: object) =>
+      JSON.stringify({ v: 2, id: 'x', sender: 'remote', deviceId: 'd', ts: Date.now(), body });
+    expect(parseEnvelope(env({ type: 'SET_MUTE', muted: true }))).not.toBeNull();
+    expect(parseEnvelope(env({ type: 'SET_MUTE', muted: 'true' }))).toBeNull();
+  });
+});

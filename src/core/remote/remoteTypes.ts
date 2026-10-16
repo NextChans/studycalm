@@ -23,6 +23,8 @@ export interface TelemetryData {
   remoteCount: number;
   /** 현재 기준/임계치 설정 */
   tuning: NoiseTuning;
+  /** 자동 경고 음소거 여부 */
+  autoAlertMuted: boolean;
   /** 커스텀 경고음 등록 여부와 이름 */
   customAlertName: string | null;
 }
@@ -38,6 +40,8 @@ export type RemoteCommand =
   | { type: 'ADJUST'; tuning: Partial<NoiseTuning> }
   /** 리모컨에서 녹음한 음성 조각 (mode=play: 즉시 방송, save: 경고음으로 등록) */
   | VoiceChunk
+  /** 자동 경고 음소거 켜기/끄기 (태블릿에 저장됨) */
+  | { type: 'SET_MUTE'; muted: boolean }
   /** 커스텀 경고음 삭제 → 기본 경고음으로 복원 */
   | { type: 'RESET_ALERT_SOUND' }
   /** 리모컨이 화면을 보고 있는 동안 주기적으로 전송 (텔레메트리 요청 겸 접속 알림) */
@@ -69,6 +73,7 @@ const COMMAND_TYPES = new Set([
   'STOP',
   'VOICE_CHUNK',
   'RESET_ALERT_SOUND',
+  'SET_MUTE',
   'PING',
 ]);
 /** 조각 base64 길이 상한 (9KB → base64 12KB) */
@@ -110,6 +115,7 @@ export function parseEnvelope(plain: string): RemoteEnvelope | null {
   }
 
   if (body.type === 'ADJUST' && (!body.tuning || typeof body.tuning !== 'object')) return null;
+  if (body.type === 'SET_MUTE' && typeof body.muted !== 'boolean') return null;
 
   if (body.type === 'VOICE_CHUNK') {
     const { clipId, seq, total, mime, mode, data } = body;

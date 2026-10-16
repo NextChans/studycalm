@@ -115,6 +115,7 @@ export const App: React.FC = () => {
         isAudioUnlocked: isOutputReady(),
         isPlaying: isPlaybackActive(),
         customAlertName: customAudioNameRef.current,
+        autoAlertMuted: cfg.autoAlertMuted,
         tuning: {
           baselineMode: cfg.baselineMode,
           manualBaselineDb: cfg.manualBaselineDb,
@@ -138,6 +139,7 @@ export const App: React.FC = () => {
       return true;
     },
     onResetAlertSound: deleteCustomAudio,
+    onSetMute: (muted) => updateConfig({ autoAlertMuted: muted }),
   });
 
   const handleApplyUpdate = useCallback(() => {
@@ -269,6 +271,12 @@ export const App: React.FC = () => {
       {/* 메인 모니터링 영역 (태블릿 가로 중앙 정렬) */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-6 py-6 flex flex-col justify-center items-center gap-6">
         {/* 상태 배지 */}
+        {config.autoAlertMuted && (
+          <div className="px-4 py-2 rounded-xl bg-slate-800 border border-slate-600 text-slate-200 text-sm font-bold">
+            🔇 자동 경고 음소거 중 · 측정만 진행합니다
+          </div>
+        )}
+
         <StatusBadge
           state={snapshot.state}
           calibrationProgress={snapshot.calibrationProgress}

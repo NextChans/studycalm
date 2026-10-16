@@ -24,6 +24,7 @@ export interface TabletRemoteHandlers {
   onSaveAlertSound: (blob: Blob) => Promise<boolean>;
   /** 커스텀 경고음 삭제 → 기본 경고음 복원 */
   onResetAlertSound: () => Promise<void>;
+  onSetMute: (muted: boolean) => void;
 }
 
 export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers) {
@@ -152,6 +153,10 @@ export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers
               }
               break;
             }
+            case 'SET_MUTE':
+              handlersRef.current.onSetMute(body.muted);
+              setTimeout(sendTelemetry, 100);
+              break;
             case 'RESET_ALERT_SOUND':
               void handlersRef.current
                 .onResetAlertSound()
