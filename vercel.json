@@ -3,7 +3,11 @@
   "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/((?!api/).*)",
+      "source": "/remote",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/remote/:path*",
       "destination": "/index.html"
     }
   ],
