@@ -5,17 +5,22 @@ import { PairingRepo, RemotePairing } from '../core/storage/pairingRepo';
 import {
   AlertVoiceMode,
   AlertVoiceSettings,
+  DETECTION_RANGES,
+  DetectionSettings,
   MAX_ALERT_PHRASES,
   NoiseTuning,
   sanitizeAlertVoice,
+  sanitizeDetection,
 } from '../config/defaults';
+import { MAX_TABLET_NAME_LENGTH } from '../core/storage/pairingRepo';
 import { TabletLinkState, useRemoteFleet } from '../hooks/useRemoteFleet';
 import { TuningControls } from './TuningControls';
 import { VoiceRecorder } from './VoiceRecorder';
 import { STORAGE_KEYS } from '../core/storage/storageKeys';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ScheduleRule, sanitizeSchedule } from '../core/schedule/schedule';
-import { VOICE_CHUNK_INTERVAL_MS, VoiceMode, newClipId, splitVoiceClip } from '../core/remote/voiceClip';
+import { MAX_VOICE_BYTES, VOICE_CHUNK_INTERVAL_MS, VoiceMode, newClipId, splitVoiceClip } from '../core/remote/voiceClip';
+import { Collapsible } from './Collapsible';
 
 /** 이 시간 동안 태블릿 텔레메트리가 없으면 오프라인으로 판단 */
 const TABLET_OFFLINE_AFTER_MS = 8_000;
@@ -624,6 +629,7 @@ export const RemoteControllerView: React.FC = () => {
             : '▶ 소음 측정 시작'}
         </button>
 
+        {selected === ALL && (
         <button
           onClick={() =>
             void sendToTargets(
@@ -636,6 +642,7 @@ export const RemoteControllerView: React.FC = () => {
         >
           {targetsStealth ? '☀️ 숨김 모드 해제 (화면 표시)' : '🌑 숨김 모드 켜기 (검은 화면)'}
         </button>
+        )}
 
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
           <div className="flex justify-between items-center">
@@ -724,62 +731,128 @@ export const RemoteControllerView: React.FC = () => {
           </div>
         </div>
 
-        <VoiceRecorder
-          disabled={!canBroadcast}
-          targetLabel={selected === ALL ? `전체 ${targetKeys.length}대` : nameOf(selected, selectedLink?.telemetry?.tabletName)}
-          onBroadcast={(blob) => sendVoice(blob, 'play')}
-          onSaveAsAlert={(blob) => sendVoice(blob, 'save')}
-        />
+        <Collapsible id="voice-recorder" title="🎙 음성 녹음 방송" summary="녹음해서 바로 방송 · 경고음 등록">
+          <VoiceRecorder
+            compact
+            title=""
+            disabled={!canBroadcast}
+            targetLabel={selected === ALL ? `전체 ${targetKeys.length}대` : nameOf(selected, selectedLink?.telemetry?.tabletName)}
+            onBroadcast={(blob) => sendVoice(blob, 'play')}
+            onSaveAsAlert={(blob) => sendVoice(blob, 'save')}
+          />
+        </Collapsible>
 
-        {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
-          <div className="flex items-center justify-between px-1 text-[11px] text-slate-400">
-            <span>
-              현재 경고음:{' '}
-              <strong className="text-slate-200">{selectedLink.telemetry.customAlertName ?? '기본 경고음'}</strong>
+        {/* ---------------- 태블릿 설정 (그룹별 열고 닫기) ---------------- */}
+        {selected === ALL ? (
+          <p className="px-1 text-[11px] text-slate-500">⚙️ 세부 설정은 위 목록에서 태블릿을 하나 선택하면 표시됩니다.</p>
+        ) : selectedOnline && selectedLink?.telemetry ? (
+          <div className="flex flex-col gap-2">
+            <span className="px-1 pt-2 text-[11px] font-bold text-slate-400">
+              ⚙️ {nameOf(selected, selectedLink.telemetry.tabletName)} 설정
             </span>
-            {selectedLink.telemetry.customAlertName && (
-              <button
-                onClick={() => void sendToTargets({ type: 'RESET_ALERT_SOUND' }, '↩️ 기본 경고음 복원을 요청했습니다.')}
-                className="underline text-sky-300"
+
+            {selectedLink.telemetry.alertVoice && (
+              <Collapsible
+                id="alert-voice"
+                title="🔔 자동 경고 음성"
+                summary={
+                  selectedLink.telemetry.alertVoice.alertVoiceMode === 'sound'
+                    ? selectedLink.telemetry.customAlertName ?? '기본 경고음'
+                    : selectedLink.telemetry.alertVoice.alertVoiceMode === 'fixed'
+                      ? `특정 멘트 · ${selectedLink.telemetry.alertVoice.alertFixedPhrase}`
+                      : `랜덤 롤링 · ${selectedLink.telemetry.alertVoice.alertPhrases.length}개`
+                }
               >
-                기본 경고음으로 복원
-              </button>
+                <RemoteAlertVoicePanel
+                  key={`alert-voice-${selected}`}
+                  current={selectedLink.telemetry.alertVoice}
+                  presets={presets}
+                  onSave={(settings) =>
+                    sendToTargets({ type: 'SET_ALERT_VOICE', settings }, '🔔 자동 경고 음성 설정을 저장했습니다.')
+                  }
+                  customAlertName={selectedLink.telemetry.customAlertName}
+                  onResetAlertSound={() =>
+                    void sendToTargets({ type: 'RESET_ALERT_SOUND' }, '↩️ 기본 경고음 복원을 요청했습니다.')
+                  }
+                  onUploadAlertFile={(file) => sendVoice(file, 'save')}
+                />
+              </Collapsible>
             )}
+
+            <Collapsible
+              id="tuning"
+              title="🎚 기준 · 임계치"
+              summary={
+                selectedLink.telemetry.tuning.thresholdMode === 'absolute'
+                  ? `임계치 ${selectedLink.telemetry.tuning.absoluteThresholdDb}dB`
+                  : `기준 +${selectedLink.telemetry.tuning.thresholdOffsetDb}dB`
+              }
+            >
+              <RemoteTuningPanel
+                key={selected}
+                link={selectedLink}
+                onSend={(tuning) => void send(selected, { type: 'ADJUST', tuning })}
+                onRecalibrate={() =>
+                  void sendToTargets({ type: 'RECALIBRATE' }, '🔄 배경소음 재측정 명령을 전송했습니다.')
+                }
+              />
+            </Collapsible>
+
+            {selectedLink.telemetry.detection && (
+              <Collapsible
+                id="detection"
+                title="⏱ 감지 · 재경고 · 볼륨"
+                summary={`${(selectedLink.telemetry.detection.sustainMs / 1000).toFixed(1)}초 지속 · 쿨다운 ${Math.round(
+                  selectedLink.telemetry.detection.cooldownMs / 1000
+                )}초 · 볼륨 ${Math.round(selectedLink.telemetry.detection.volume * 100)}%`}
+              >
+                <RemoteDetectionPanel
+                  key={`detection-${selected}`}
+                  current={selectedLink.telemetry.detection}
+                  onSave={(settings) =>
+                    sendToTargets({ type: 'SET_DETECTION', settings }, '⏱ 감지 설정을 저장했습니다.')
+                  }
+                />
+              </Collapsible>
+            )}
+
+            <Collapsible
+              id="schedule"
+              title="🕒 시간대별 운영 스케줄"
+              summary={`${selectedLink.telemetry.schedule.length}개 규칙`}
+            >
+              <RemoteSchedulePanel
+                key={`schedule-${selected}`}
+                rules={selectedLink.telemetry.schedule}
+                announceVoices={selectedLink.telemetry.announceVoices ?? []}
+                onSave={(rules) => sendToTargets({ type: 'SET_SCHEDULE', rules }, '🕒 스케줄을 저장했습니다.')}
+                onPlayAnnouncement={(ruleId) =>
+                  void sendToTargets({ type: 'PLAY_ANNOUNCEMENT', ruleId }, '📢 안내 방송을 요청했습니다.')
+                }
+                onRecordAnnouncement={(ruleId, blob) => sendVoice(blob, 'announce', ruleId)}
+              />
+            </Collapsible>
+
+            <Collapsible
+              id="device"
+              title="📟 태블릿 관리"
+              summary={selectedLink.telemetry.stealthMode ? '🌑 숨김 모드' : '화면 표시'}
+            >
+              <RemoteDevicePanel
+                key={`device-${selected}`}
+                name={selectedLink.telemetry.tabletName}
+                stealthMode={selectedLink.telemetry.stealthMode}
+                onRename={(name) => sendToTargets({ type: 'SET_TABLET_NAME', name }, '📟 태블릿 이름을 변경했습니다.')}
+                onToggleStealth={() =>
+                  void sendToTargets(
+                    { type: 'SET_STEALTH', enabled: !selectedLink.telemetry!.stealthMode },
+                    selectedLink.telemetry!.stealthMode ? '☀️ 숨김 모드를 해제했습니다.' : '🌑 숨김 모드(검은 화면)를 켰습니다.'
+                  )
+                }
+              />
+            </Collapsible>
           </div>
-        )}
-
-        {selected !== ALL && selectedOnline && selectedLink?.telemetry?.alertVoice && (
-          <RemoteAlertVoicePanel
-            key={`alert-voice-${selected}`}
-            current={selectedLink.telemetry.alertVoice}
-            presets={presets}
-            onSave={(settings) =>
-              sendToTargets({ type: 'SET_ALERT_VOICE', settings }, '🔔 자동 경고 음성 설정을 저장했습니다.')
-            }
-          />
-        )}
-
-        {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
-          <RemoteSchedulePanel
-            key={`schedule-${selected}`}
-            rules={selectedLink.telemetry.schedule}
-            announceVoices={selectedLink.telemetry.announceVoices ?? []}
-            onSave={(rules) => sendToTargets({ type: 'SET_SCHEDULE', rules }, '🕒 스케줄을 저장했습니다.')}
-            onPlayAnnouncement={(ruleId) =>
-              void sendToTargets({ type: 'PLAY_ANNOUNCEMENT', ruleId }, '📢 안내 방송을 요청했습니다.')
-            }
-            onRecordAnnouncement={(ruleId, blob) => sendVoice(blob, 'announce', ruleId)}
-          />
-        )}
-
-        {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
-          <RemoteTuningPanel
-            key={selected}
-            link={selectedLink}
-            onSend={(tuning) => void send(selected, { type: 'ADJUST', tuning })}
-            onRecalibrate={() => void sendToTargets({ type: 'RECALIBRATE' }, '🔄 배경소음 재측정 명령을 전송했습니다.')}
-          />
-        )}
+        ) : null}
       </section>
 
       <footer className="mt-auto pt-3 border-t border-slate-900 text-center text-[10px] text-slate-500">
@@ -802,8 +875,11 @@ const RemoteAlertVoicePanel: React.FC<{
   current: AlertVoiceSettings;
   presets: string[];
   onSave: (settings: AlertVoiceSettings) => Promise<void>;
-}> = ({ current, presets, onSave }) => {
-  const [open, setOpen] = useState(false);
+  customAlertName: string | null;
+  onResetAlertSound: () => void;
+  onUploadAlertFile: (file: File) => Promise<void>;
+}> = ({ current, presets, onSave, customAlertName, onResetAlertSound, onUploadAlertFile }) => {
+  const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [draft, setDraft] = useState<AlertVoiceSettings>(current);
   const [dirty, setDirty] = useState(false);
   const [customInput, setCustomInput] = useState('');
@@ -832,21 +908,9 @@ const RemoteAlertVoicePanel: React.FC<{
       patch({ alertPhrases: [...draft.alertPhrases, text] });
     setCustomInput('');
   };
-  const summary =
-    current.alertVoiceMode === 'sound'
-      ? '기본 경고음'
-      : current.alertVoiceMode === 'fixed'
-        ? `특정 멘트 · "${current.alertFixedPhrase}"`
-        : `랜덤 롤링 · ${current.alertPhrases.length}개`;
   const invalid = draft.alertVoiceMode === 'random' && draft.alertPhrases.length === 0;
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
-      <button onClick={() => setOpen((v) => !v)} className="flex justify-between items-center text-left gap-2">
-        <span className="text-xs font-bold text-slate-200 shrink-0">🔔 자동 경고 음성</span>
-        <span className="text-[11px] text-slate-400 truncate">{open ? '접기' : summary}</span>
-      </button>
-      {open && (
         <>
           <div className="grid grid-cols-3 gap-1.5">
             {ALERT_VOICE_MODES.map((m) => (
@@ -945,9 +1009,207 @@ const RemoteAlertVoicePanel: React.FC<{
             )}
           </div>
           <p className="text-[10px] text-slate-500">저장 후 위의 "즉시 주의 방송"으로 실제 소리를 확인할 수 있습니다.</p>
+
+          {/* 기본 경고음 모드에서 쓰는 음원 */}
+          <div className="flex flex-col gap-2 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-between text-[11px] text-slate-400">
+              <span>
+                경고음 음원: <strong className="text-slate-200">{customAlertName ?? '기본 경고음'}</strong>
+              </span>
+              {customAlertName && (
+                <button onClick={onResetAlertSound} className="underline text-sky-300">
+                  기본으로 복원
+                </button>
+              )}
+            </div>
+            <label className="self-start px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] text-indigo-300 cursor-pointer">
+              📁 음원 파일로 등록
+              <input
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  if (file.size > MAX_VOICE_BYTES) {
+                    setUploadMsg(`파일이 너무 큽니다 (${Math.round(file.size / 1024)}KB). ${Math.round(MAX_VOICE_BYTES / 1024)}KB 이하 음원을 사용해주세요.`);
+                    return;
+                  }
+                  setUploadMsg('전송 중...');
+                  onUploadAlertFile(file)
+                    .then(() => setUploadMsg(null))
+                    .catch((err) => setUploadMsg(err instanceof Error ? err.message : '전송 실패'));
+                }}
+              />
+            </label>
+            <p className="text-[10px] text-slate-500">
+              녹음으로 등록하려면 위 "🎙 음성 녹음 방송"에서 녹음 후 "경고음으로 등록"을 누르세요. 파일은{' '}
+              {Math.round(MAX_VOICE_BYTES / 1024)}KB 이하(약 15~20초 mp3/m4a).
+            </p>
+            {uploadMsg && <p className="text-[11px] text-amber-300">{uploadMsg}</p>}
+          </div>
         </>
-      )}
-    </div>
+  );
+};
+
+const DETECTION_FIELDS: {
+  key: keyof DetectionSettings;
+  label: string;
+  hint: string;
+  format: (v: number) => string;
+}[] = [
+  {
+    key: 'sustainMs',
+    label: '초과 지속 시간',
+    hint: '이 시간 이상 계속 시끄러울 때만 경고 (순간 소음 무시)',
+    format: (v) => `${(v / 1000).toFixed(1)}초`,
+  },
+  {
+    key: 'cooldownMs',
+    label: '재경고 쿨다운',
+    hint: '경고 후 이 시간 동안은 다시 경고하지 않음',
+    format: (v) => `${Math.round(v / 1000)}초`,
+  },
+  { key: 'volume', label: '안내 음성 볼륨', hint: '경고음·방송 전체 볼륨', format: (v) => `${Math.round(v * 100)}%` },
+  {
+    key: 'postPlaybackMuteMs',
+    label: '재생 후 판정 무시',
+    hint: '경고음이 마이크에 다시 잡혀 연속 경고되는 것을 방지',
+    format: (v) => `${(v / 1000).toFixed(1)}초`,
+  },
+  {
+    key: 'emaAlpha',
+    label: '스무딩 계수',
+    hint: '낮을수록 소음 수치가 부드럽게(느리게) 변함',
+    format: (v) => v.toFixed(2),
+  },
+];
+
+/**
+ * 감지·재경고·볼륨 세부 설정 (태블릿 설정 화면과 동일 범위, 저장 버튼으로 전송)
+ */
+const RemoteDetectionPanel: React.FC<{
+  current: DetectionSettings;
+  onSave: (settings: Partial<DetectionSettings>) => Promise<void>;
+}> = ({ current, onSave }) => {
+  const [draft, setDraft] = useState<DetectionSettings>(current);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (!dirty) setDraft(current);
+  }, [current, dirty]);
+
+  return (
+    <>
+      {DETECTION_FIELDS.map((f) => {
+        const range = DETECTION_RANGES[f.key];
+        return (
+          <div key={f.key} className="flex flex-col gap-1">
+            <div className="flex justify-between items-center text-xs">
+              <span className="font-semibold text-slate-200">{f.label}</span>
+              <span className="font-mono text-indigo-300">{f.format(draft[f.key])}</span>
+            </div>
+            <input
+              type="range"
+              min={range.min}
+              max={range.max}
+              step={range.step}
+              value={draft[f.key]}
+              onChange={(e) => {
+                setDraft((prev) => ({ ...prev, [f.key]: Number(e.target.value) }));
+                setDirty(true);
+              }}
+              className="accent-indigo-400 cursor-pointer"
+            />
+            <span className="text-[10px] text-slate-500">{f.hint}</span>
+          </div>
+        );
+      })}
+      <div className="flex gap-2">
+        <button
+          onClick={() => void onSave(sanitizeDetection(draft)).then(() => setDirty(false))}
+          disabled={!dirty}
+          className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white"
+        >
+          저장
+        </button>
+        {dirty && (
+          <button
+            onClick={() => {
+              setDraft(current);
+              setDirty(false);
+            }}
+            className="px-3 py-2 rounded-xl bg-slate-800 text-xs text-slate-300"
+          >
+            취소
+          </button>
+        )}
+      </div>
+    </>
+  );
+};
+
+/**
+ * 태블릿 이름 변경 · 숨김 모드 (관리자 PIN·페어링 키 재발급은 보안상 태블릿에서만)
+ */
+const RemoteDevicePanel: React.FC<{
+  name: string;
+  stealthMode: boolean;
+  onRename: (name: string) => Promise<void>;
+  onToggleStealth: () => void;
+}> = ({ name, stealthMode, onRename, onToggleStealth }) => {
+  const [nameInput, setNameInput] = useState(name);
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setNameInput(name);
+  }, [name, editing]);
+
+  return (
+    <>
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-semibold text-slate-200">태블릿 이름</span>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={nameInput}
+            maxLength={MAX_TABLET_NAME_LENGTH}
+            onFocus={() => setEditing(true)}
+            onChange={(e) => setNameInput(e.target.value)}
+            className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
+          />
+          <button
+            onClick={() =>
+              void onRename(nameInput.trim()).then(() => setEditing(false))
+            }
+            disabled={!nameInput.trim() || nameInput.trim() === name}
+            className="px-3 rounded-xl bg-slate-800 disabled:opacity-40 text-xs font-bold text-indigo-300 shrink-0"
+          >
+            변경
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col">
+          <span className="text-xs font-semibold text-slate-200">🌑 숨김 모드 (검은 화면)</span>
+          <span className="text-[10px] text-slate-500">화면은 켜둔 채 검은 화면만 표시 (터치 시 30초 표시)</span>
+        </div>
+        <button
+          onClick={onToggleStealth}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 ${
+            stealthMode ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'
+          }`}
+        >
+          {stealthMode ? '켜짐' : '꺼짐'}
+        </button>
+      </div>
+
+      <p className="text-[10px] text-slate-500 leading-relaxed">
+        🔒 관리자 PIN 변경과 페어링 키 재발급은 보안을 위해 태블릿 화면에서만 할 수 있습니다.
+      </p>
+    </>
   );
 };
 
@@ -1006,7 +1268,6 @@ const RemoteSchedulePanel: React.FC<{
   };
   const [draft, setDraft] = useState<ScheduleRule[]>(rules);
   const [dirty, setDirty] = useState(false);
-  const [open, setOpen] = useState(false);
 
   // 편집 중이 아닐 때만 태블릿의 실제 값으로 동기화
   useEffect(() => {
@@ -1014,12 +1275,6 @@ const RemoteSchedulePanel: React.FC<{
   }, [rules, dirty]);
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
-      <button onClick={() => setOpen((v) => !v)} className="flex justify-between items-center text-left">
-        <span className="text-xs font-bold text-slate-200">🕒 시간대별 운영 스케줄 ({rules.length})</span>
-        <span className="text-[11px] text-slate-400">{open ? '접기' : '펼치기'}</span>
-      </button>
-      {open && (
         <>
           <ScheduleEditor
             rules={draft}
@@ -1052,8 +1307,6 @@ const RemoteSchedulePanel: React.FC<{
             )}
           </div>
         </>
-      )}
-    </div>
   );
 };
 
@@ -1099,9 +1352,8 @@ const RemoteTuningPanel: React.FC<{
   };
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
-      <div className="flex justify-between items-center">
-        <span className="text-xs font-bold text-slate-200">🎚 기준 · 임계치 조정</span>
+    <>
+      <div className="flex justify-end items-center">
         <button
           onClick={onRecalibrate}
           disabled={draft.baselineMode === 'manual' || !telemetry.isAudioRunning}
@@ -1118,6 +1370,6 @@ const RemoteTuningPanel: React.FC<{
         compact
       />
       <p className="text-[10px] text-slate-500">변경 내용은 태블릿에 즉시 적용·저장됩니다.</p>
-    </div>
+    </>
   );
 };

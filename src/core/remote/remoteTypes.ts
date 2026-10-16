@@ -1,4 +1,4 @@
-import type { AlertVoiceSettings, NoiseTuning } from '../../config/defaults';
+import type { AlertVoiceSettings, DetectionSettings, NoiseTuning } from '../../config/defaults';
 import type { ScheduleRule } from '../schedule/schedule';
 import { MAX_VOICE_CHUNKS, VOICE_CHUNK_BYTES, type VoiceChunk } from './voiceClip';
 
@@ -38,6 +38,8 @@ export interface TelemetryData {
   audioError: string | null;
   /** 배터리 (지원하지 않는 기기는 null) */
   battery: { level: number; charging: boolean } | null;
+  /** 감지·재경고·볼륨 세부 설정 */
+  detection: DetectionSettings;
   /** 자동 경고 음성 방식 (기본 경고음 / 특정 멘트 / 랜덤 롤링) */
   alertVoice: AlertVoiceSettings;
   /** 녹음 음성이 등록된 정시 안내 규칙 id 목록 */
@@ -59,6 +61,10 @@ export type RemoteCommand =
   | { type: 'ADJUST'; tuning: Partial<NoiseTuning> }
   /** 리모컨에서 녹음한 음성 조각 (mode=play: 즉시 방송, save: 경고음으로 등록) */
   | VoiceChunk
+  /** 감지·재경고·볼륨 세부 설정 변경 (태블릿에서 재검증 후 저장) */
+  | { type: 'SET_DETECTION'; settings: Partial<DetectionSettings> }
+  /** 태블릿 이름 변경 */
+  | { type: 'SET_TABLET_NAME'; name: string }
   /** 자동 경고 음성 방식 변경 (태블릿에서 재검증 후 저장) */
   | { type: 'SET_ALERT_VOICE'; settings: AlertVoiceSettings }
   /** 정시 안내 규칙을 지금 한 번 방송 (미리 듣기) */
@@ -110,6 +116,8 @@ const COMMAND_TYPES = new Set([
   'SET_SCHEDULE',
   'PLAY_ANNOUNCEMENT',
   'SET_ALERT_VOICE',
+  'SET_DETECTION',
+  'SET_TABLET_NAME',
   'PING',
 ]);
 /** 조각 base64 길이 상한 (9KB → base64 12KB) */
@@ -155,7 +163,15 @@ export function parseEnvelope(plain: string): RemoteEnvelope | null {
   if (body.type === 'SET_MUTE' && typeof body.muted !== 'boolean') return null;
   if (body.type === 'SET_STEALTH' && typeof body.enabled !== 'boolean') return null;
   if (body.type === 'SET_SCHEDULE' && !Array.isArray(body.rules)) return null;
-  if (body.type === 'SET_ALERT_VOICE' && (!body.settings || typeof body.settings !== 'object')) return null;
+  if (
+    (body.type === 'SET_ALERT_VOICE' || body.type === 'SET_DETECTION') &&
+    (!body.settings || typeof body.settings !== 'object')
+  ) {
+    return null;
+  }
+  if (body.type === 'SET_TABLET_NAME' && (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 60)) {
+    return null;
+  }
   if (body.type === 'PLAY_ANNOUNCEMENT' && (typeof body.ruleId !== 'string' || !RULE_ID_RE.test(body.ruleId))) {
     return null;
   }

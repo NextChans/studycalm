@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RemoteClient } from '../core/remote/RemoteClient';
 import { createPairingSession } from '../core/remote/pairing';
 import { TelemetryData } from '../core/remote/remoteTypes';
-import { AlertVoiceSettings, NoiseTuning, sanitizeAlertVoice, sanitizeTuning } from '../config/defaults';
+import {
+  AlertVoiceSettings,
+  DetectionSettings,
+  NoiseTuning,
+  sanitizeAlertVoice,
+  sanitizeDetection,
+  sanitizeTuning,
+} from '../config/defaults';
 import { TransportStatus } from '../core/remote/transports';
 import { PairingRepo } from '../core/storage/pairingRepo';
 import { VoiceClipAssembler } from '../core/remote/voiceClip';
@@ -31,6 +38,7 @@ export interface TabletRemoteHandlers {
   onStopMonitoring: () => void;
   onSetSchedule: (rules: ScheduleRule[]) => void;
   onSetAlertVoice: (settings: AlertVoiceSettings) => void;
+  onSetDetection: (settings: Partial<DetectionSettings>) => void;
   /** 정시 안내 규칙에 녹음 등록 (재생 불가 형식이면 false) */
   onSaveAnnounceClip: (ruleId: string, blob: Blob) => Promise<boolean>;
   /** 정시 안내 규칙 즉시 방송 (미리 듣기) */
@@ -173,6 +181,19 @@ export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers
                   setTimeout(sendTelemetry, 100);
                 })();
               }
+              break;
+            }
+            case 'SET_DETECTION': {
+              const settings = sanitizeDetection(body.settings as Partial<Record<keyof DetectionSettings, unknown>>);
+              if (Object.keys(settings).length > 0) handlersRef.current.onSetDetection(settings);
+              setTimeout(sendTelemetry, 100);
+              break;
+            }
+            case 'SET_TABLET_NAME': {
+              const saved = PairingRepo.setTabletName(body.name);
+              tabletNameRef.current = saved;
+              setTabletNameState(saved);
+              setTimeout(sendTelemetry, 100);
               break;
             }
             case 'SET_ALERT_VOICE':

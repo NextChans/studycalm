@@ -53,3 +53,22 @@ describe('SET_ALERT_VOICE 명령 검증', () => {
     expect(parseEnvelope(env({ type: 'SET_ALERT_VOICE' }))).toBeNull();
   });
 });
+
+describe('sanitizeDetection / SET_DETECTION / SET_TABLET_NAME', () => {
+  it('범위 밖 값은 경계로, 단위(step)에 맞춰 보정하고 형식이 틀린 값은 버린다', async () => {
+    const { sanitizeDetection } = await import('../src/config/defaults');
+    expect(
+      sanitizeDetection({ sustainMs: 99999, cooldownMs: 12_345, volume: 0.333, emaAlpha: 'x', postPlaybackMuteMs: -1 })
+    ).toEqual({ sustainMs: 5000, cooldownMs: 10_000, volume: 0.35, postPlaybackMuteMs: 500 });
+  });
+
+  it('명령 형식 검증', () => {
+    const env = (body: object) =>
+      JSON.stringify({ v: 2, id: 'x', sender: 'remote', deviceId: 'd', ts: Date.now(), body });
+    expect(parseEnvelope(env({ type: 'SET_DETECTION', settings: { sustainMs: 1000 } }))).not.toBeNull();
+    expect(parseEnvelope(env({ type: 'SET_DETECTION' }))).toBeNull();
+    expect(parseEnvelope(env({ type: 'SET_TABLET_NAME', name: '1층 휴게실' }))).not.toBeNull();
+    expect(parseEnvelope(env({ type: 'SET_TABLET_NAME', name: '   ' }))).toBeNull();
+    expect(parseEnvelope(env({ type: 'SET_TABLET_NAME', name: 'x'.repeat(100) }))).toBeNull();
+  });
+});
