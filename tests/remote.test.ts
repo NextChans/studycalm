@@ -60,7 +60,7 @@ describe('pairing', () => {
     const key = generatePairingKey();
     expect(isValidPairingKey(key)).toBe(true);
     expect(isValidPairingKey('sc-abc123')).toBe(false);
-    const parsed = parsePairingLink(`https://x.app/remote#k=${key}&n=${encodeURIComponent('1층 열람실')}`);
+    const parsed = parsePairingLink(`https://x.app/?mode=remote#k=${key}&n=${encodeURIComponent('1층 열람실')}`);
     expect(parsed).toEqual({ key, name: '1층 열람실' });
     expect(parsePairingLink('https://x.app/?room=sc-abc123')).toBeNull();
   });
