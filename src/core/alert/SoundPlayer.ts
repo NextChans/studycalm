@@ -165,6 +165,43 @@ export class SoundPlayer {
     });
   }
 
+  /**
+   * 리모컨에서 녹음해 보낸 음성 방송: 딩동 차임 → 녹음 음성. 재생 중이면 대기열에서 순서대로 재생.
+   */
+  public playVoiceClip(blob: Blob): Promise<boolean> {
+    const decoded = SoundPlayer.decodeBlob(blob);
+    decoded.catch(() => {});
+    const url = URL.createObjectURL(blob);
+    return this.run('queue', async (gen) => {
+      try {
+        await ChimeSynthesizer.playChime(this.volume);
+        if (gen !== this.generation) return;
+        try {
+          await this.playBuffer(await decoded, gen);
+        } catch (err) {
+          console.warn('[SoundPlayer] Voice clip decode failed, trying HTMLAudio:', err);
+          await this.playHtmlAudio(url, gen);
+        }
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    });
+  }
+
+  /** 이 기기에서 재생(디코딩) 가능한 음원인지 확인 — 경고음 등록 전 검증용 */
+  public static async canDecode(blob: Blob): Promise<boolean> {
+    try {
+      const buffer = await this.decodeBlob(blob);
+      return buffer.duration > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private static async decodeBlob(blob: Blob): Promise<AudioBuffer> {
+    return decodeAudio(ChimeSynthesizer.getContext(), await blob.arrayBuffer());
+  }
+
   public stop(): void {
     this.generation++;
     this.stopCurrent?.();

@@ -5,6 +5,8 @@ import { PairingRepo, RemotePairing } from '../core/storage/pairingRepo';
 import { NoiseTuning } from '../config/defaults';
 import { TabletLinkState, useRemoteFleet } from '../hooks/useRemoteFleet';
 import { TuningControls } from './TuningControls';
+import { VoiceRecorder } from './VoiceRecorder';
+import { VOICE_CHUNK_INTERVAL_MS, VoiceMode, newClipId, splitVoiceClip } from '../core/remote/voiceClip';
 
 /** 이 시간 동안 태블릿 텔레메트리가 없으면 오프라인으로 판단 */
 const TABLET_OFFLINE_AFTER_MS = 8_000;
@@ -118,6 +120,11 @@ export const RemoteControllerView: React.FC = () => {
         return;
       }
       clearPending(key, event.requestId);
+      // 경고음 등록/복원 결과는 태블릿이 보낸 문구를 그대로 표시
+      if (event.text.startsWith('경고음')) {
+        showToast(`${event.status === 'DONE' ? '✅' : '⚠️'} [${name}] ${event.text}`);
+        return;
+      }
       const messages = {
         DONE: `✅ [${name}] 방송 완료`,
         STOPPED: `⏹ [${name}] 방송 중지됨`,
@@ -169,6 +176,44 @@ export const RemoteControllerView: React.FC = () => {
     }
     navigator.vibrate?.(command.type === 'ALERT' ? 200 : 80);
     showToast(targetKeys.length > 1 ? `${toast} (${sent}대)` : toast);
+  };
+
+  /**
+   * 녹음 음성을 대상 태블릿들로 전송 (조각마다 암호화, 초당 전송 제한을 피하도록 간격을 둠)
+   */
+  const sendVoice = async (blob: Blob, mode: VoiceMode) => {
+    if (targetKeys.length === 0) throw new Error('응답하는 태블릿이 없습니다.');
+    const clipId = newClipId();
+    const chunks = await splitVoiceClip(blob, mode, clipId);
+    let delivered = 0;
+    for (const key of targetKeys) {
+      let ok = true;
+      for (const chunk of chunks) {
+        if (!(await send(key, chunk))) {
+          ok = false;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, VOICE_CHUNK_INTERVAL_MS));
+      }
+      if (!ok) continue;
+      delivered++;
+      if (mode === 'play') {
+        setPending((prev) => ({ ...prev, [key]: clipId }));
+        const old = pendingTimersRef.current.get(key);
+        if (old) clearTimeout(old);
+        pendingTimersRef.current.set(
+          key,
+          setTimeout(() => {
+            pendingTimersRef.current.delete(key);
+            clearPending(key, clipId);
+          }, BROADCAST_TIMEOUT_MS)
+        );
+      }
+    }
+    if (delivered === 0) throw new Error('중계 서버에 연결되어 있지 않습니다.');
+    navigator.vibrate?.(80);
+    const suffix = targetKeys.length > 1 ? ` (${delivered}대)` : '';
+    showToast(mode === 'play' ? `🎙 음성 방송을 전송했습니다${suffix}` : `🔔 경고음 등록 요청을 전송했습니다${suffix}`);
   };
 
   const handleSendTts = (text: string) => {
@@ -415,6 +460,30 @@ export const RemoteControllerView: React.FC = () => {
             </button>
           </div>
         </div>
+
+        <VoiceRecorder
+          disabled={!canBroadcast}
+          targetLabel={selected === ALL ? `전체 ${targetKeys.length}대` : nameOf(selected, selectedLink?.telemetry?.tabletName)}
+          onBroadcast={(blob) => sendVoice(blob, 'play')}
+          onSaveAsAlert={(blob) => sendVoice(blob, 'save')}
+        />
+
+        {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
+          <div className="flex items-center justify-between px-1 text-[11px] text-slate-400">
+            <span>
+              현재 경고음:{' '}
+              <strong className="text-slate-200">{selectedLink.telemetry.customAlertName ?? '기본 경고음'}</strong>
+            </span>
+            {selectedLink.telemetry.customAlertName && (
+              <button
+                onClick={() => void sendToTargets({ type: 'RESET_ALERT_SOUND' }, '↩️ 기본 경고음 복원을 요청했습니다.')}
+                className="underline text-sky-300"
+              >
+                기본 경고음으로 복원
+              </button>
+            )}
+          </div>
+        )}
 
         {selected !== ALL && selectedOnline && selectedLink?.telemetry && (
           <RemoteTuningPanel

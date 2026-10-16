@@ -203,6 +203,11 @@ export function useNoiseMonitor() {
     return (await playerRef.current?.playAnnouncement(text)) ?? false;
   }, []);
 
+  /** 리모컨 녹음 음성 즉시 방송 */
+  const playRemoteVoice = useCallback(async (blob: Blob): Promise<boolean> => {
+    return (await playerRef.current?.playVoiceClip(blob)) ?? false;
+  }, []);
+
   const previewAlert = useCallback(async (volume?: number): Promise<void> => {
     playerRef.current?.unlock();
     await playerRef.current?.playPreview(volume);
@@ -239,6 +244,7 @@ export function useNoiseMonitor() {
     recalibrate,
     triggerManualAlert,
     speakTts,
+    playRemoteVoice,
     previewAlert,
     stopPlayback,
     isOutputReady,
