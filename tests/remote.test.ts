@@ -221,3 +221,13 @@ describe('SET_STEALTH / SET_SCHEDULE 명령 검증', () => {
     expect(parseEnvelope(env({ type: 'SET_SCHEDULE', rules: 'x' }))).toBeNull();
   });
 });
+
+describe('START_MONITORING / STOP_MONITORING 명령', () => {
+  it('리모컨이 보낸 측정 시작/정지 명령을 허용하고, 태블릿이 보낸 경우는 거부한다', () => {
+    const env = (sender: string, body: object) =>
+      JSON.stringify({ v: 2, id: 'x', sender, deviceId: 'd', ts: Date.now(), body });
+    expect(parseEnvelope(env('remote', { type: 'START_MONITORING' }))).not.toBeNull();
+    expect(parseEnvelope(env('remote', { type: 'STOP_MONITORING' }))).not.toBeNull();
+    expect(parseEnvelope(env('tablet', { type: 'STOP_MONITORING' }))).toBeNull();
+  });
+});
