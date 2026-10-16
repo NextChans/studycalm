@@ -248,6 +248,13 @@ export const App: React.FC = () => {
         battery: bat,
         audioError: audioErrorRef.current,
         announceVoices: announceVoicesRef.current,
+        detection: {
+          sustainMs: cfg.sustainMs,
+          cooldownMs: cfg.cooldownMs,
+          postPlaybackMuteMs: cfg.postPlaybackMuteMs,
+          emaAlpha: cfg.emaAlpha,
+          volume: cfg.volume,
+        },
         alertVoice: {
           alertVoiceMode: cfg.alertVoiceMode,
           alertFixedPhrase: cfg.alertFixedPhrase,
@@ -306,6 +313,7 @@ export const App: React.FC = () => {
       void CustomAudioRepo.pruneAnnounceClips(rules.map((r) => r.id)).then(refreshAnnounceVoices);
     },
     onSetAlertVoice: (settings) => updateConfig(settings),
+    onSetDetection: (settings) => updateConfig(settings),
     onSaveAnnounceClip: async (ruleId, blob) => {
       if (!(await SoundPlayer.canDecode(blob))) return false;
       await CustomAudioRepo.saveAnnounceClip(ruleId, blob);

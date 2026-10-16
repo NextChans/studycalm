@@ -122,3 +122,31 @@ export function sanitizeAlertVoice(input: Partial<Record<keyof AlertVoiceSetting
   if (mode === 'random' && phrases.length === 0) mode = 'sound';
   return { alertVoiceMode: mode, alertFixedPhrase: fixed, alertPhrases: phrases };
 }
+
+/** 감지·재경고·볼륨 등 리모컨에서도 조정 가능한 세부 설정 */
+export type DetectionSettings = Pick<
+  NoiseConfig,
+  'sustainMs' | 'cooldownMs' | 'postPlaybackMuteMs' | 'emaAlpha' | 'volume'
+>;
+
+/** 태블릿 설정 화면과 동일한 허용 범위 */
+export const DETECTION_RANGES: Record<keyof DetectionSettings, { min: number; max: number; step: number }> = {
+  sustainMs: { min: 500, max: 5000, step: 100 },
+  cooldownMs: { min: 10_000, max: 120_000, step: 5_000 },
+  postPlaybackMuteMs: { min: 500, max: 4000, step: 100 },
+  emaAlpha: { min: 0.05, max: 0.5, step: 0.01 },
+  volume: { min: 0.1, max: 1, step: 0.05 },
+};
+
+/** 범위 밖·형식이 틀린 값은 버리고, 범위 안의 값은 단위(step)로 맞춤 */
+export function sanitizeDetection(input: Partial<Record<keyof DetectionSettings, unknown>>): Partial<DetectionSettings> {
+  const out: Partial<DetectionSettings> = {};
+  for (const key of Object.keys(DETECTION_RANGES) as (keyof DetectionSettings)[]) {
+    const v = input[key];
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    const { min, max, step } = DETECTION_RANGES[key];
+    const snapped = Math.round(clamp(v, min, max) / step) * step;
+    out[key] = Number(snapped.toFixed(4));
+  }
+  return out;
+}
