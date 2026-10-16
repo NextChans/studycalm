@@ -8,4 +8,6 @@ export const STORAGE_KEYS = {
   TABLET_PAIRING_KEY: 'studycalm_tablet_pairing_key_v2',
   TABLET_NAME: 'studycalm_tablet_name_v2',
   REMOTE_PAIRINGS: 'studycalm_remote_pairings_v2',
+  /** 측정 중이었는지 — 재시작/새로고침 후 자동 재개용 */
+  MONITORING_DESIRED: 'studycalm_monitoring_desired_v1',
 } as const;

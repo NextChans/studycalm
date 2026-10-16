@@ -28,3 +28,20 @@ describe('SettingsRepo 자동 경고 음소거', () => {
     expect(SettingsRepo.load().autoAlertMuted).toBe(true);
   });
 });
+
+describe('SettingsRepo 숨김 모드/스케줄', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('숨김 모드는 true일 때만 켜지고, 스케줄은 검증되어 로드된다', () => {
+    localStorage.setItem(
+      STORAGE_KEYS.SETTINGS,
+      JSON.stringify({
+        stealthMode: 1,
+        schedule: [{ id: 'x', start: '22:00', end: '08:00', days: 'daily', mode: 'mute' }, { bad: true }],
+      })
+    );
+    const cfg = SettingsRepo.load();
+    expect(cfg.stealthMode).toBe(false);
+    expect(cfg.schedule).toHaveLength(1);
+  });
+});

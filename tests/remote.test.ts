@@ -210,3 +210,14 @@ describe('SET_MUTE 명령 검증', () => {
     expect(parseEnvelope(env({ type: 'SET_MUTE', muted: 'true' }))).toBeNull();
   });
 });
+
+describe('SET_STEALTH / SET_SCHEDULE 명령 검증', () => {
+  const env = (body: object) =>
+    JSON.stringify({ v: 2, id: 'x', sender: 'remote', deviceId: 'd', ts: Date.now(), body });
+  it('형식이 틀리면 거부한다', () => {
+    expect(parseEnvelope(env({ type: 'SET_STEALTH', enabled: true }))).not.toBeNull();
+    expect(parseEnvelope(env({ type: 'SET_STEALTH', enabled: 1 }))).toBeNull();
+    expect(parseEnvelope(env({ type: 'SET_SCHEDULE', rules: [] }))).not.toBeNull();
+    expect(parseEnvelope(env({ type: 'SET_SCHEDULE', rules: 'x' }))).toBeNull();
+  });
+});

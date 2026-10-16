@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIG, NoiseConfig, sanitizeTuning } from '../../config/defaults';
 import { STORAGE_KEYS } from './storageKeys';
+import { sanitizeSchedule } from '../schedule/schedule';
 
 export class SettingsRepo {
   public static load(): NoiseConfig {
@@ -21,6 +22,8 @@ export class SettingsRepo {
         // 태블릿마다 다른 멘트가 나오지 않도록 항상 현재 기본값을 사용
         soundFiles: DEFAULT_CONFIG.soundFiles,
         autoAlertMuted: parsed.autoAlertMuted === true,
+        stealthMode: parsed.stealthMode === true,
+        schedule: sanitizeSchedule(parsed.schedule),
       };
     } catch (e) {
       console.warn('[SettingsRepo] Failed to parse stored settings:', e);

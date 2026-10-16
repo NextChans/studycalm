@@ -6,6 +6,7 @@ import { NoiseTuning, sanitizeTuning } from '../config/defaults';
 import { TransportStatus } from '../core/remote/transports';
 import { PairingRepo } from '../core/storage/pairingRepo';
 import { VoiceClipAssembler } from '../core/remote/voiceClip';
+import { ScheduleRule, sanitizeSchedule } from '../core/schedule/schedule';
 
 /** 리모컨 PING이 이 시간 안에 있었으면 "보고 있는 리모컨"으로 간주하고 텔레메트리 송신 */
 const REMOTE_ACTIVE_WINDOW_MS = 15_000;
@@ -25,6 +26,8 @@ export interface TabletRemoteHandlers {
   /** 커스텀 경고음 삭제 → 기본 경고음 복원 */
   onResetAlertSound: () => Promise<void>;
   onSetMute: (muted: boolean) => void;
+  onSetStealth: (enabled: boolean) => void;
+  onSetSchedule: (rules: ScheduleRule[]) => void;
 }
 
 export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers) {
@@ -153,6 +156,15 @@ export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers
               }
               break;
             }
+            case 'SET_STEALTH':
+              handlersRef.current.onSetStealth(body.enabled);
+              setTimeout(sendTelemetry, 100);
+              break;
+            case 'SET_SCHEDULE':
+              // 원격 입력은 태블릿에서 다시 검증 (형식이 틀린 규칙은 버림)
+              handlersRef.current.onSetSchedule(sanitizeSchedule(body.rules));
+              setTimeout(sendTelemetry, 100);
+              break;
             case 'SET_MUTE':
               handlersRef.current.onSetMute(body.muted);
               setTimeout(sendTelemetry, 100);
