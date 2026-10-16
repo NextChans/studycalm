@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RemoteClient } from '../core/remote/RemoteClient';
 import { createPairingSession } from '../core/remote/pairing';
 import { TelemetryData } from '../core/remote/remoteTypes';
-import { NoiseTuning, sanitizeTuning } from '../config/defaults';
+import { AlertVoiceSettings, NoiseTuning, sanitizeAlertVoice, sanitizeTuning } from '../config/defaults';
 import { TransportStatus } from '../core/remote/transports';
 import { PairingRepo } from '../core/storage/pairingRepo';
 import { VoiceClipAssembler } from '../core/remote/voiceClip';
@@ -30,6 +30,7 @@ export interface TabletRemoteHandlers {
   onStartMonitoring: () => Promise<void>;
   onStopMonitoring: () => void;
   onSetSchedule: (rules: ScheduleRule[]) => void;
+  onSetAlertVoice: (settings: AlertVoiceSettings) => void;
   /** 정시 안내 규칙에 녹음 등록 (재생 불가 형식이면 false) */
   onSaveAnnounceClip: (ruleId: string, blob: Blob) => Promise<boolean>;
   /** 정시 안내 규칙 즉시 방송 (미리 듣기) */
@@ -174,6 +175,12 @@ export function useTabletRemote(enabled: boolean, handlers: TabletRemoteHandlers
               }
               break;
             }
+            case 'SET_ALERT_VOICE':
+              handlersRef.current.onSetAlertVoice(
+                sanitizeAlertVoice(body.settings as Partial<Record<keyof AlertVoiceSettings, unknown>>)
+              );
+              setTimeout(sendTelemetry, 100);
+              break;
             case 'PLAY_ANNOUNCEMENT':
               void runBroadcast(envelope.id, '🕒 정시 안내 방송', () =>
                 handlersRef.current.onPlayAnnouncement(body.ruleId)

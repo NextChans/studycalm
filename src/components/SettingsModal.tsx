@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { DEFAULT_CONFIG, NoiseConfig } from '../config/defaults';
+import { AlertVoiceMode, DEFAULT_CONFIG, MAX_ALERT_PHRASES, NoiseConfig, sanitizeAlertVoice } from '../config/defaults';
 import { CustomAudioItem } from '../core/storage/customAudioRepo';
 import { TuningControls } from './TuningControls';
 import { ScheduleEditor } from './ScheduleEditor';
@@ -71,7 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSave = () => {
-    onSave({ ...formData, schedule: sanitizeSchedule(formData.schedule) });
+    onSave({ ...formData, schedule: sanitizeSchedule(formData.schedule), ...sanitizeAlertVoice(formData) });
     setSaveToast(true);
     setTimeout(() => {
       setSaveToast(false);
@@ -301,6 +301,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="w-5 h-5 accent-indigo-500 shrink-0"
             />
           </label>
+
+          {/* 0-0. 자동 경고 음성 */}
+          <div className="flex flex-col gap-2 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+            <span className="font-semibold text-slate-200 text-sm">🔔 자동 경고 음성</span>
+            <select
+              value={formData.alertVoiceMode}
+              onChange={(e) => handleChange('alertVoiceMode', e.target.value as AlertVoiceMode)}
+              className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+            >
+              <option value="sound">기본 경고음 (경고음 파일 / 등록한 녹음)</option>
+              <option value="fixed">특정 멘트 고정</option>
+              <option value="random">멘트 랜덤 롤링</option>
+            </select>
+            {formData.alertVoiceMode === 'fixed' && (
+              <input
+                type="text"
+                value={formData.alertFixedPhrase}
+                maxLength={120}
+                onChange={(e) => handleChange('alertFixedPhrase', e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-base sm:text-xs text-white"
+              />
+            )}
+            {formData.alertVoiceMode === 'random' && (
+              <>
+                <textarea
+                  rows={4}
+                  value={formData.alertPhrases.join('\n')}
+                  placeholder="한 줄에 멘트 하나씩 입력"
+                  onChange={(e) => handleChange('alertPhrases', e.target.value.split('\n'))}
+                  className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-base sm:text-xs text-white resize-none"
+                />
+                <span className="text-[11px] text-slate-400">
+                  한 줄에 하나씩, 최대 {MAX_ALERT_PHRASES}개. 같은 멘트가 연속으로 나오지 않게 무작위 재생합니다.
+                </span>
+              </>
+            )}
+          </div>
 
           {/* 0-1. 숨김(검은 화면) 모드 */}
           <label className="flex items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800 cursor-pointer">

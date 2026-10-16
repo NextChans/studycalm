@@ -248,6 +248,11 @@ export const App: React.FC = () => {
         battery: bat,
         audioError: audioErrorRef.current,
         announceVoices: announceVoicesRef.current,
+        alertVoice: {
+          alertVoiceMode: cfg.alertVoiceMode,
+          alertFixedPhrase: cfg.alertFixedPhrase,
+          alertPhrases: cfg.alertPhrases,
+        },
         nextAnnouncement: (() => {
           const next = nextAnnouncement(cfg.schedule, new Date());
           if (!next) return null;
@@ -300,6 +305,7 @@ export const App: React.FC = () => {
       // 삭제된 안내 규칙의 녹음 정리
       void CustomAudioRepo.pruneAnnounceClips(rules.map((r) => r.id)).then(refreshAnnounceVoices);
     },
+    onSetAlertVoice: (settings) => updateConfig(settings),
     onSaveAnnounceClip: async (ruleId, blob) => {
       if (!(await SoundPlayer.canDecode(blob))) return false;
       await CustomAudioRepo.saveAnnounceClip(ruleId, blob);

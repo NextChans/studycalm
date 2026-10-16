@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG, NoiseConfig, sanitizeTuning } from '../../config/defaults';
+import { DEFAULT_CONFIG, NoiseConfig, sanitizeAlertVoice, sanitizeTuning } from '../../config/defaults';
 import { STORAGE_KEYS } from './storageKeys';
 import { sanitizeSchedule } from '../schedule/schedule';
 
@@ -23,6 +23,7 @@ export class SettingsRepo {
         soundFiles: DEFAULT_CONFIG.soundFiles,
         autoAlertMuted: parsed.autoAlertMuted === true,
         stealthMode: parsed.stealthMode === true,
+        ...sanitizeAlertVoice(parsed),
         schedule: sanitizeSchedule(parsed.schedule),
       };
     } catch (e) {

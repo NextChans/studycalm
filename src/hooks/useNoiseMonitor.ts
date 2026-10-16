@@ -132,6 +132,12 @@ export function useNoiseMonitor() {
     playerRef.current?.setVolume(effectiveConfig.volume);
   }, [effectiveConfig]);
 
+  // 자동 경고 음성 방식 (멘트 음성은 미리 받아둠)
+  const { alertVoiceMode, alertFixedPhrase, alertPhrases } = config;
+  useEffect(() => {
+    playerRef.current?.setAlertVoice({ mode: alertVoiceMode, fixed: alertFixedPhrase, phrases: alertPhrases });
+  }, [alertVoiceMode, alertFixedPhrase, alertPhrases]);
+
   // Save new custom audio
   const saveCustomAudio = useCallback(async (blob: Blob, name: string) => {
     const item = await CustomAudioRepo.saveAudio(blob, name);
