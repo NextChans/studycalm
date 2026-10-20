@@ -35,12 +35,13 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // 외부 요청, 서버리스 API(/api/tts 등)는 서비스워커를 거치지 않는다
+  // 외부 요청, 서버리스 API(/api/tts 등), Vercel Analytics(/_vercel/insights)는 서비스워커를 거치지 않는다
   // 버전 확인 파일은 항상 네트워크에서 (캐시하면 새 배포를 감지할 수 없음)
   if (
     event.request.method !== 'GET' ||
     url.origin !== self.location.origin ||
     url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/_vercel/') ||
     url.pathname === '/version.json'
   ) {
     return;

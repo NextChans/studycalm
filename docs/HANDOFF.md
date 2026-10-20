@@ -34,6 +34,11 @@
   - 공용 MQTT 브로커 EMQX(`wss:8084`), HiveMQ(`wss:8884`)
 - **저장소**: 각 기기의 `localStorage`(설정, PIN 해시, 페어링)와 `IndexedDB`(커스텀 경고음, 안내 녹음)
 - **CI**: `.github/workflows/ci.yml`에서 typecheck → lint → test → build를 실행합니다. Vercel이 PR마다 Preview를 배포합니다.
+- **분석**: Vercel Web Analytics(`@vercel/analytics`, `src/main.tsx`)를 씁니다.
+  - 페이지뷰만 수집하며, 오디오나 측정값은 보내지 않습니다.
+  - 전송 전에 `sanitizeAnalyticsUrl`로 URL을 정리합니다. 리모컨 링크의 **페어링 키 fragment(`#k=`)와 쿼리는 버리고**, 경로는 태블릿 `/`, 리모컨 `/remote` 두 가지만 남깁니다.
+  - 스크립트와 수집 엔드포인트는 같은 출처(`/_vercel/insights/*`)라서 CSP를 바꿀 필요가 없습니다. SW는 이 경로를 캐시하지 않습니다.
+  - Vercel 대시보드 → 프로젝트 → Analytics에서 **Enable**을 눌러야 수집이 시작됩니다.
 
 ### 환경 변수
 

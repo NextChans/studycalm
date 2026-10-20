@@ -17,6 +17,7 @@ npm run typecheck && npm run lint && npm test && npm run build
 - 소리는 반드시 `SoundPlayer`의 공유 Web Audio 컨텍스트로 재생하세요. 제스처 없이 `new Audio().play()`를 호출하면 iOS와 Android에서 막힙니다.
 - 경고 음원을 교체하면 `src/config/defaults.ts`의 `?v=` 값, `public/sw.js`의 precache, `CACHE_NAME`을 함께 올리세요.
 - 오디오를 녹음하거나 원격으로 송신하는 기능(실시간 청취 등)은 만들지 마세요. 법적 위험이 있습니다.
+- 분석(Vercel Analytics) 등 외부로 보내는 URL에는 페어링 키(`#k=`)가 절대 들어가면 안 됩니다. `sanitizeAnalyticsUrl`을 거치세요.
 - 커밋, PR, 코드에 AI 모델 식별자를 넣지 마세요.
 
 ## 작업 흐름
